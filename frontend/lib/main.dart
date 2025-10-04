@@ -153,121 +153,9 @@ class _MemoryPageState extends State<MemoryPage> with TickerProviderStateMixin {
   }
 
   void _initializeSampleData() {
-    // Beispieldaten für die letzten 3 Monate mit neuer Struktur
-    final now = DateTime.now();
-    historyEntries = [
-      // Heute
-      {
-        'id': 1,
-        'title': 'Schöner Spaziergang',
-        'content': 'Heute war ein wunderschöner Tag. Ich bin spazieren gegangen und habe die Natur genossen.',
-        'media_files': [
-          {'filename': 'spaziergang1.jpg', 'file_type': 'photo', 'file_size': 2048000},
-          {'filename': 'spaziergang2.jpg', 'file_type': 'photo', 'file_size': 1856000},
-        ],
-        'timestamp': DateTime(now.year, now.month, now.day, 9, 30),
-        'date': DateTime(now.year, now.month, now.day),
-      },
-      {
-        'id': 2,
-        'title': 'Familienessen',
-        'content': 'Mittagessen mit der Familie war sehr schön. Wir haben viel gelacht und uns über die letzten Wochen ausgetauscht.',
-        'media_files': [
-          {'filename': 'familie_video.mp4', 'file_type': 'video', 'file_size': 15728640, 'duration': 45},
-        ],
-        'timestamp': DateTime(now.year, now.month, now.day, 13, 15),
-        'date': DateTime(now.year, now.month, now.day),
-      },
-      // Gestern
-      {
-        'id': 3,
-        'title': 'Buch gelesen',
-        'content': 'Gestern habe ich ein interessantes Buch gelesen. Es handelte von der Geschichte unserer Stadt.',
-        'media_files': [],
-        'timestamp': DateTime(now.year, now.month, now.day - 1, 16, 45),
-        'date': DateTime(now.year, now.month, now.day - 1),
-      },
-      {
-        'id': 4,
-        'title': 'Abendspaziergang',
-        'content': 'Abendspaziergang war sehr entspannend. Die Sonne ging gerade unter.',
-        'media_files': [
-          {'filename': 'sonnenuntergang.jpg', 'file_type': 'photo', 'file_size': 3072000},
-          {'filename': 'abend_audio.m4a', 'file_type': 'audio', 'file_size': 512000, 'duration': 30},
-        ],
-        'timestamp': DateTime(now.year, now.month, now.day - 1, 19, 20),
-        'date': DateTime(now.year, now.month, now.day - 1),
-      },
-      // Vor 3 Tagen
-      {
-        'id': 5,
-        'title': 'Arztbesuch',
-        'content': 'Besuch beim Arzt verlief gut. Alle Werte sind in Ordnung.',
-        'media_files': [
-          {'filename': 'arzt_termin.jpg', 'file_type': 'photo', 'file_size': 1024000},
-        ],
-        'timestamp': DateTime(now.year, now.month, now.day - 3, 10, 0),
-        'date': DateTime(now.year, now.month, now.day - 3),
-      },
-      // Vor einer Woche
-      {
-        'id': 6,
-        'title': 'Wochenende mit Enkeln',
-        'content': 'Wochenende mit den Enkeln war wunderbar. Wir haben im Garten gespielt.',
-        'media_files': [
-          {'filename': 'enkel_video.mp4', 'file_type': 'video', 'file_size': 25165824, 'duration': 120},
-          {'filename': 'garten_foto1.jpg', 'file_type': 'photo', 'file_size': 2560000},
-          {'filename': 'garten_foto2.jpg', 'file_type': 'photo', 'file_size': 2304000},
-        ],
-        'timestamp': DateTime(now.year, now.month, now.day - 7, 14, 30),
-        'date': DateTime(now.year, now.month, now.day - 7),
-      },
-      // Vor 2 Wochen
-      {
-        'id': 7,
-        'title': 'Neues Rezept',
-        'content': 'Neues Rezept ausprobiert - sehr lecker! Es war ein italienisches Pasta-Gericht.',
-        'media_files': [
-          {'filename': 'pasta_foto.jpg', 'file_type': 'photo', 'file_size': 2048000},
-        ],
-        'timestamp': DateTime(now.year, now.month, now.day - 14, 18, 0),
-        'date': DateTime(now.year, now.month, now.day - 14),
-      },
-      // Vor einem Monat
-      {
-        'id': 8,
-        'title': 'Geburtstag gefeiert',
-        'content': 'Geburtstag meiner Tochter gefeiert. Sie wurde 45 Jahre alt.',
-        'media_files': [
-          {'filename': 'geburtstag_video.mp4', 'file_type': 'video', 'file_size': 52428800, 'duration': 180},
-          {'filename': 'geburtstag_kuchen.jpg', 'file_type': 'photo', 'file_size': 3072000},
-        ],
-        'timestamp': DateTime(now.year, now.month - 1, now.day, 15, 0),
-        'date': DateTime(now.year, now.month - 1, now.day),
-      },
-      // Vor 2 Monaten
-      {
-        'id': 9,
-        'title': 'Urlaub am Meer',
-        'content': 'Urlaub am Meer war traumhaft. Wir waren eine Woche an der Ostsee.',
-        'media_files': [
-          {'filename': 'meer_foto1.jpg', 'file_type': 'photo', 'file_size': 4096000},
-          {'filename': 'meer_foto2.jpg', 'file_type': 'photo', 'file_size': 3840000},
-          {'filename': 'meer_video.mp4', 'file_type': 'video', 'file_size': 104857600, 'duration': 300},
-        ],
-        'timestamp': DateTime(now.year, now.month - 2, now.day, 11, 30),
-        'date': DateTime(now.year, now.month - 2, now.day),
-      },
-      // Vor 3 Monaten
-      {
-        'id': 10,
-        'title': 'Neue Brille',
-        'content': 'Neue Brille bekommen - viel besser sehen! Die Sehstärke hat sich verändert.',
-        'media_files': [],
-        'timestamp': DateTime(now.year, now.month - 3, now.day, 9, 15),
-        'date': DateTime(now.year, now.month - 3, now.day),
-      },
-    ];
+    // Beispieldaten werden nicht mehr geladen - nur echte Daten aus der API
+    // Die historyEntries werden jetzt über _syncHistoryEntries() mit den echten Daten synchronisiert
+    historyEntries = [];
   }
 
   @override
@@ -286,11 +174,27 @@ class _MemoryPageState extends State<MemoryPage> with TickerProviderStateMixin {
         final List<dynamic> data = json.decode(response.body);
         setState(() {
           memories = data.map((json) => Memory.fromJson(json)).toList();
+          // Synchronisiere historyEntries mit den echten Daten
+          _syncHistoryEntries();
         });
       }
     } catch (e) {
       print('Error fetching memories: $e');
     }
+  }
+
+  void _syncHistoryEntries() {
+    // Konvertiere Memory-Objekte zu historyEntries-Format
+    historyEntries = memories.map((memory) {
+      return {
+        'id': memory.id,
+        'title': memory.title,
+        'content': memory.content,
+        'media_files': memory.mediaFiles.map((f) => f.toJson()).toList(),
+        'timestamp': memory.createdAt ?? DateTime.now(),
+        'date': memory.createdAt ?? DateTime.now(),
+      };
+    }).toList();
   }
 
   Future<void> addMemory(String content, {String? title, List<MediaFile>? mediaFiles}) async {
@@ -312,7 +216,8 @@ class _MemoryPageState extends State<MemoryPage> with TickerProviderStateMixin {
         _controller.clear();
         _titleController.clear();
         _selectedMediaFiles.clear();
-        fetchMemories();
+        // Lade die Daten neu, damit sie in der Kalender-Ansicht erscheinen
+        await fetchMemories();
       }
     } catch (e) {
       print('Error adding memory: $e');

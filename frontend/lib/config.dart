@@ -1,7 +1,7 @@
 class AppConfig {
   // API-Konfiguration
   //static const String apiUrl = 'http://localhost:8000/memories';
-  final apiUrl = 'https://ronnyactahackathon.onrender.com/memories';
+  static const String apiUrl = 'https://ronnyactahackathon.onrender.com/memories';
   
   // Weitere Konfigurationen können hier hinzugefügt werden
   static const String appName = 'Memory Keeper';
