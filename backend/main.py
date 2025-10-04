@@ -9,6 +9,40 @@ import json
 import uuid
 from datetime import datetime
 
+# --- Konfiguration ---
+DB_PATH = "memory_keeper.db"
+UPLOAD_DIR = "uploads"
+
+# Upload-Verzeichnis erstellen
+os.makedirs(UPLOAD_DIR, exist_ok=True)
+
+# --- SQLite Verbindung ---
+def get_db_connection():
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+def init_database():
+    """Tabelle anlegen, falls sie noch nicht existiert"""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS memories (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            title TEXT NOT NULL,
+            content TEXT NOT NULL,
+            media_files TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    conn.commit()
+    conn.close()
+
+# Tabelle direkt beim Start erstellen
+init_database()
+
+# --- FastAPI App ---
 app = FastAPI(title="Memory Keeper API")
 
 # CORS für Flutter Web
@@ -20,40 +54,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# SQLite DB Verbindung
-DB_PATH = "memory_keeper.db"
-UPLOAD_DIR = "uploads"
-
-# Upload-Verzeichnis erstellen
-os.makedirs(UPLOAD_DIR, exist_ok=True)
-
-def get_db_connection():
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    return conn
-
-def init_database():
-    """Datenbank initialisieren mit neuer Struktur"""
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    
-    # Alte Tabelle löschen und neue erstellen
-    cursor.execute("DROP TABLE IF EXISTS memories")
-    cursor.execute("""
-        CREATE TABLE memories (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            title TEXT NOT NULL,
-            content TEXT NOT NULL,
-            media_files TEXT,  -- JSON Array mit Dateinamen
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    """)
-    
-    conn.commit()
-    conn.close()
-
-# Datenmodell
+# --- Datenmodelle ---
 class MediaFile(BaseModel):
     filename: str
     file_type: str  # 'photo', 'video', 'audio'
@@ -68,16 +69,10 @@ class Memory(BaseModel):
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 
-# Root-Route
+# --- Endpoints ---
 @app.get("/")
 def root():
     return {"message": "Memory Keeper API läuft!"}
-
-# Datenbank initialisieren
-@app.post("/init-db")
-def initialize_database():
-    init_database()
-    return {"message": "Datenbank initialisiert!"}
 
 # Alle Memories abrufen
 @app.get("/memories", response_model=List[Memory])
