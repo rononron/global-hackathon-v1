@@ -8,9 +8,12 @@ import os
 import json
 import uuid
 from datetime import datetime
+from groq_client import generate_smart_title
 
 # --- Konfiguration ---
 DB_PATH = "memory_keeper.db"
+QUESTIONS_DB_PATH = "questions.db"
+DAILY_SUMMARIES_DB_PATH = "daily_summaries.db"
 UPLOAD_DIR = "uploads"
 
 # Upload-Verzeichnis erstellen
@@ -21,6 +24,104 @@ def get_db_connection():
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     return conn
+
+def get_questions_db_connection():
+    conn = sqlite3.connect(QUESTIONS_DB_PATH)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+def get_daily_summaries_db_connection():
+    conn = sqlite3.connect(DAILY_SUMMARIES_DB_PATH)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+# --- Fragenvorschläge Datenbank initialisieren ---
+def init_questions_db():
+    conn = get_questions_db_connection()
+    cursor = conn.cursor()
+    
+    # Tabelle für Fragenvorschläge erstellen
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS questions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            question_text TEXT NOT NULL,
+            category TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            is_active BOOLEAN DEFAULT 1
+        )
+    ''')
+    
+    # Prüfen ob bereits Daten vorhanden sind
+    cursor.execute("SELECT COUNT(*) FROM questions")
+    count = cursor.fetchone()[0]
+    
+    if count == 0:
+        # 10 Testfragen einfügen
+        test_questions = [
+            "Wie war dein Tag heute – ruhig, stressig oder besonders ereignisreich?",
+            "Worüber möchtest du heute erzählen: Arbeit, Familie, Freizeit oder etwas ganz anderes?",
+            "Was hat dich heute glücklich gemacht oder dir ein Lächeln geschenkt?",
+            "Gab es heute etwas, das dich überrascht oder zum Nachdenken gebracht hat?",
+            "Mit wem hast du heute Zeit verbracht, und was habt ihr gemeinsam erlebt?",
+            "Hattest du heute einen Moment, in dem du besonders stolz auf dich warst?",
+            "Wie hast du dich heute körperlich und seelisch gefühlt?",
+            "Gibt es etwas, worauf du dich morgen besonders freust?",
+            "Möchtest du heute lieber in Erinnerungen schwelgen oder von neuen Plänen erzählen?",
+            "Wenn du den Tag in einem Wort zusammenfassen müsstest – welches wäre das und warum?"
+        ]
+        
+        for question in test_questions:
+            cursor.execute(
+                "INSERT INTO questions (question_text, category) VALUES (?, ?)",
+                (question, "allgemein")
+            )
+        
+        print(f"✅ {len(test_questions)} Testfragen in die Datenbank eingefügt")
+    
+    conn.commit()
+    conn.close()
+
+# Datenbank beim Start initialisieren
+init_questions_db()
+
+# --- Tageszusammenfassungen Datenbank initialisieren ---
+def init_daily_summaries_db():
+    conn = get_daily_summaries_db_connection()
+    cursor = conn.cursor()
+    
+    # Tabelle für Tageszusammenfassungen erstellen
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS daily_summaries (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            date DATE NOT NULL UNIQUE,
+            summary TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+    
+    conn.commit()
+    conn.close()
+
+init_daily_summaries_db()
+
+def generate_ai_title(content: str) -> str:
+    """
+    Generiert einen kurzen, beschreibenden Titel für den gegebenen Inhalt mit Hugging Face.
+    Kostenfrei und lokal ausführbar.
+    """
+    print(f"Generiere Titel mit Hugging Face für: '{content[:50]}...'")
+    return generate_smart_title(content)
+
+def generate_title_on_demand(content: str) -> str:
+    """
+    Generiert einen Titel nur auf explizite Anfrage (z.B. über API-Endpoint).
+    Wird nicht automatisch bei der Erstellung aufgerufen.
+    """
+    print(f"Generiere Titel auf Anfrage für: '{content[:50]}...'")
+    return generate_smart_title(content)
+
 
 def init_database():
     """Tabelle anlegen, falls sie noch nicht existiert"""
@@ -58,7 +159,7 @@ app.add_middleware(
 class MediaFile(BaseModel):
     filename: str
     file_type: str  # 'photo', 'video', 'audio'
-    file_size: int
+    file_size: Optional[int] = None  # Für Demo optional
     duration: Optional[int] = None  # Für Audio/Video in Sekunden
 
 class Memory(BaseModel):
@@ -66,6 +167,13 @@ class Memory(BaseModel):
     title: str
     content: str
     media_files: Optional[List[MediaFile]] = []
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+class DailySummary(BaseModel):
+    id: Optional[int] = None
+    date: str  # Format: YYYY-MM-DD
+    summary: str
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 
@@ -85,10 +193,10 @@ def get_memories():
     for row in memories:
         memory_data = {
             "id": row["id"],
-            "title": row["title"],
+            "title": row["title"] or "",  # Leerer String statt None
             "content": row["content"],
             "created_at": row["created_at"],
-            "updated_at": row["updated_at"]
+            "updated_at": None  # updated_at existiert nicht in der DB
         }
         
         # Media Files parsen
@@ -111,17 +219,23 @@ def add_memory(memory: Memory):
     conn = get_db_connection()
     cursor = conn.cursor()
     
+    # Titel wird NICHT automatisch generiert - bleibt leer oder verwendet den übergebenen Titel
+    final_title = memory.title if memory.title else ""
+    print(f"Speichere Memory ohne automatische Titel-Generierung: '{final_title}'")
+    
     # Media Files zu JSON konvertieren
     media_files_json = json.dumps([media.dict() for media in memory.media_files]) if memory.media_files else "[]"
     
     cursor.execute(
         "INSERT INTO memories (title, content, media_files) VALUES (?, ?, ?)", 
-        (memory.title, memory.content, media_files_json)
+        (final_title, memory.content, media_files_json)
     )
     conn.commit()
     memory.id = cursor.lastrowid
+    memory.title = final_title
     conn.close()
     return memory
+
 
 # Media-Datei hochladen
 @app.post("/upload-media")
@@ -159,3 +273,280 @@ async def get_media(filename: str):
         return FileResponse(file_path)
     else:
         return {"error": "Datei nicht gefunden"}
+
+# Endpoint für KI-Titel-Generierung auf Anfrage
+@app.post("/generate-title")
+def generate_title(request: dict):
+    """Generiert einen Titel für den gegebenen Inhalt"""
+    content = request.get("content", "")
+    if not content:
+        return {"error": "Kein Inhalt bereitgestellt"}
+    
+    print(f"Generiere Titel auf Anfrage für: '{content}'")
+    ai_title = generate_title_on_demand(content)
+    print(f"KI-Titel generiert: '{ai_title}'")
+    
+    return {
+        "original_content": content,
+        "generated_title": ai_title,
+        "success": True
+    }
+
+# Endpoint um Titel für bestehende Memory zu aktualisieren
+@app.put("/memories/{memory_id}/title")
+def update_memory_title(memory_id: int, request: dict):
+    """Aktualisiert den Titel einer bestehenden Memory"""
+    content = request.get("content", "")
+    if not content:
+        return {"error": "Kein Inhalt bereitgestellt"}
+    
+    # Generiere neuen Titel
+    new_title = generate_title_on_demand(content)
+    
+    # Aktualisiere in der Datenbank
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "UPDATE memories SET title = ? WHERE id = ?", 
+        (new_title, memory_id)
+    )
+    conn.commit()
+    conn.close()
+    
+    return {
+        "memory_id": memory_id,
+        "new_title": new_title,
+        "success": True
+    }
+
+# --- Fragenvorschläge API Endpoints ---
+
+@app.get("/questions")
+def get_questions():
+    """Holt alle aktiven Fragenvorschläge"""
+    conn = get_questions_db_connection()
+    questions = conn.execute(
+        "SELECT * FROM questions WHERE is_active = 1 ORDER BY RANDOM()"
+    ).fetchall()
+    conn.close()
+    
+    result = []
+    for row in questions:
+        result.append({
+            "id": row["id"],
+            "question_text": row["question_text"],
+            "category": row["category"],
+            "created_at": row["created_at"],
+            "updated_at": row["updated_at"]
+        })
+    
+    return result
+
+@app.get("/questions/random")
+def get_random_question():
+    """Holt eine zufällige Frage"""
+    conn = get_questions_db_connection()
+    question = conn.execute(
+        "SELECT * FROM questions WHERE is_active = 1 ORDER BY RANDOM() LIMIT 1"
+    ).fetchone()
+    conn.close()
+    
+    if question:
+        return {
+            "id": question["id"],
+            "question_text": question["question_text"],
+            "category": question["category"],
+            "created_at": question["created_at"],
+            "updated_at": question["updated_at"]
+        }
+    else:
+        return {"error": "Keine Fragen gefunden"}
+
+@app.post("/questions")
+def add_question(question_data: dict):
+    """Fügt eine neue Frage hinzu"""
+    question_text = question_data.get("question_text", "")
+    category = question_data.get("category", "allgemein")
+    
+    if not question_text:
+        return {"error": "Fragentext ist erforderlich"}
+    
+    conn = get_questions_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "INSERT INTO questions (question_text, category) VALUES (?, ?)",
+        (question_text, category)
+    )
+    conn.commit()
+    question_id = cursor.lastrowid
+    conn.close()
+    
+    return {
+        "id": question_id,
+        "question_text": question_text,
+        "category": category,
+        "success": True
+    }
+
+@app.put("/questions/{question_id}")
+def update_question(question_id: int, question_data: dict):
+    """Aktualisiert eine bestehende Frage"""
+    question_text = question_data.get("question_text", "")
+    category = question_data.get("category", "")
+    
+    conn = get_questions_db_connection()
+    cursor = conn.cursor()
+    
+    if question_text:
+        cursor.execute(
+            "UPDATE questions SET question_text = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+            (question_text, question_id)
+        )
+    
+    if category:
+        cursor.execute(
+            "UPDATE questions SET category = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+            (category, question_id)
+        )
+    
+    conn.commit()
+    conn.close()
+    
+    return {"success": True, "question_id": question_id}
+
+@app.delete("/questions/{question_id}")
+def delete_question(question_id: int):
+    """Löscht eine Frage (setzt is_active auf 0)"""
+    conn = get_questions_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "UPDATE questions SET is_active = 0, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+        (question_id,)
+    )
+    conn.commit()
+    conn.close()
+    
+    return {"success": True, "question_id": question_id}
+
+@app.delete("/memories/{memory_id}")
+def delete_memory(memory_id: int):
+    """Löscht eine Memory komplett aus der Datenbank"""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    # Prüfe ob Memory existiert
+    cursor.execute("SELECT id FROM memories WHERE id = ?", (memory_id,))
+    if not cursor.fetchone():
+        conn.close()
+        return {"error": "Memory nicht gefunden"}
+    
+    # Lösche Memory
+    cursor.execute("DELETE FROM memories WHERE id = ?", (memory_id,))
+    conn.commit()
+    conn.close()
+    
+    return {"success": True, "memory_id": memory_id}
+
+# --- Tageszusammenfassungen Endpoints ---
+@app.get("/daily-summaries", response_model=List[DailySummary])
+def get_daily_summaries():
+    """Alle Tageszusammenfassungen abrufen"""
+    conn = get_daily_summaries_db_connection()
+    summaries = conn.execute("SELECT * FROM daily_summaries ORDER BY date DESC").fetchall()
+    conn.close()
+    
+    result = []
+    for row in summaries:
+        summary_data = {
+            "id": row["id"],
+            "date": row["date"],
+            "summary": row["summary"],
+            "created_at": row["created_at"],
+            "updated_at": row["updated_at"]
+        }
+        result.append(summary_data)
+    
+    return result
+
+@app.get("/daily-summaries/{date}", response_model=DailySummary)
+def get_daily_summary(date: str):
+    """Tageszusammenfassung für ein bestimmtes Datum abrufen"""
+    conn = get_daily_summaries_db_connection()
+    summary = conn.execute("SELECT * FROM daily_summaries WHERE date = ?", (date,)).fetchone()
+    conn.close()
+    
+    if not summary:
+        return {"error": "Keine Zusammenfassung für dieses Datum gefunden"}
+    
+    return {
+        "id": summary["id"],
+        "date": summary["date"],
+        "summary": summary["summary"],
+        "created_at": summary["created_at"],
+        "updated_at": summary["updated_at"]
+    }
+
+@app.post("/daily-summaries", response_model=DailySummary)
+def create_daily_summary(summary: DailySummary):
+    """Neue Tageszusammenfassung erstellen oder aktualisieren"""
+    conn = get_daily_summaries_db_connection()
+    cursor = conn.cursor()
+    
+    # Prüfe ob bereits eine Zusammenfassung für dieses Datum existiert
+    existing = cursor.execute("SELECT id FROM daily_summaries WHERE date = ?", (summary.date,)).fetchone()
+    
+    if existing:
+        # Aktualisiere bestehende Zusammenfassung
+        cursor.execute(
+            "UPDATE daily_summaries SET summary = ?, updated_at = CURRENT_TIMESTAMP WHERE date = ?",
+            (summary.summary, summary.date)
+        )
+        summary.id = existing["id"]
+    else:
+        # Erstelle neue Zusammenfassung
+        cursor.execute(
+            "INSERT INTO daily_summaries (date, summary) VALUES (?, ?)",
+            (summary.date, summary.summary)
+        )
+        summary.id = cursor.lastrowid
+    
+    conn.commit()
+    conn.close()
+    
+    return summary
+
+@app.delete("/daily-summaries/{date}")
+def delete_daily_summary(date: str):
+    """Tageszusammenfassung für ein bestimmtes Datum löschen"""
+    conn = get_daily_summaries_db_connection()
+    cursor = conn.cursor()
+    
+    # Prüfe ob Zusammenfassung existiert
+    cursor.execute("SELECT id FROM daily_summaries WHERE date = ?", (date,))
+    if not cursor.fetchone():
+        conn.close()
+        return {"error": "Keine Zusammenfassung für dieses Datum gefunden"}
+    
+    cursor.execute("DELETE FROM daily_summaries WHERE date = ?", (date,))
+    conn.commit()
+    conn.close()
+    
+    return {"success": True, "date": date}
+
+# Test-Endpoint für KI-Titel-Generierung
+@app.post("/test-ai-title")
+def test_ai_title(request: dict):
+    """Test-Endpoint um KI-Titel-Generierung zu testen"""
+    content = request.get("content", "")
+    if not content:
+        return {"error": "Kein Inhalt bereitgestellt"}
+    
+    print(f"Teste KI-Titel-Generierung für: '{content}'")
+    ai_title = generate_ai_title(content)
+    print(f"KI-Titel generiert: '{ai_title}'")
+    
+    return {
+        "original_content": content,
+        "ai_title": ai_title,
+        "success": True
+    }

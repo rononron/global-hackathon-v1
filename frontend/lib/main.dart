@@ -33,7 +33,7 @@ class MediaFile {
   factory MediaFile.fromJson(Map<String, dynamic> json) => MediaFile(
     filename: json['filename'],
     fileType: json['file_type'],
-    fileSize: json['file_size'],
+    fileSize: json['file_size'] ?? 0, // Default für Demo
     duration: json['duration'],
   );
 }
@@ -80,6 +80,62 @@ class Memory {
   );
 }
 
+class Question {
+  final int id;
+  final String questionText;
+  final String category;
+  final DateTime? createdAt;
+  final DateTime? updatedAt;
+
+  Question({
+    required this.id,
+    required this.questionText,
+    required this.category,
+    this.createdAt,
+    this.updatedAt,
+  });
+
+  factory Question.fromJson(Map<String, dynamic> json) => Question(
+    id: json['id'],
+    questionText: json['question_text'],
+    category: json['category'],
+    createdAt: json['created_at'] != null 
+        ? DateTime.parse(json['created_at']) 
+        : null,
+    updatedAt: json['updated_at'] != null 
+        ? DateTime.parse(json['updated_at']) 
+        : null,
+  );
+}
+
+class DailySummary {
+  final int? id;
+  final String date;
+  final String summary;
+  final DateTime? createdAt;
+  final DateTime? updatedAt;
+
+  DailySummary({
+    this.id,
+    required this.date,
+    required this.summary,
+    this.createdAt,
+    this.updatedAt,
+  });
+
+  factory DailySummary.fromJson(Map<String, dynamic> json) => DailySummary(
+    id: json['id'],
+    date: json['date'],
+    summary: json['summary'],
+    createdAt: json['created_at'] != null 
+        ? DateTime.parse(json['created_at']) 
+        : null,
+    updatedAt: json['updated_at'] != null 
+        ? DateTime.parse(json['updated_at']) 
+        : null,
+  );
+}
+
 void main() {
   runApp(MemoryKeeperApp());
 }
@@ -112,10 +168,17 @@ class _MemoryPageState extends State<MemoryPage> with TickerProviderStateMixin {
   final TextEditingController _speechController = TextEditingController();
   final TextEditingController _titleController = TextEditingController();
   List<Memory> memories = [];
+  List<Question> questions = [];
+  List<DailySummary> dailySummaries = [];
   final apiUrl = AppConfig.apiUrl;
   bool showPostEditor = false;
   bool isListening = false;
   bool showHistory = false;
+  bool showDetailView = false;
+  bool showDailySummary = false;
+  Map<String, dynamic>? selectedEntry;
+  DailySummary? currentDailySummary;
+  int currentStreak = 0;
   late bool isLargeMode = true; // Standard: vergrößerter Modus
   late AnimationController _pulseController;
   late AnimationController _pulseController2;
@@ -126,11 +189,14 @@ class _MemoryPageState extends State<MemoryPage> with TickerProviderStateMixin {
   late bool isHistoryView = false;
   DateTime currentMonth = DateTime.now();
   DateTime? selectedDay;
+  late ScrollController _calendarScrollController;
   List<Map<String, dynamic>> historyEntries = [];
   
   // Media States
   List<MediaFile> _selectedMediaFiles = [];
   final ImagePicker _imagePicker = ImagePicker();
+  bool _showSimulatedMedia = false;
+  List<Map<String, dynamic>> _simulatedMediaFiles = [];
   bool _isRecording = false;
   bool _isPlaying = false;
   String? _recordingPath;
@@ -140,6 +206,7 @@ class _MemoryPageState extends State<MemoryPage> with TickerProviderStateMixin {
   void initState() {
     super.initState();
     fetchMemories();
+    fetchQuestions();
     _pulseController = AnimationController(
       duration: Duration(milliseconds: 1000),
       vsync: this,
@@ -148,8 +215,8 @@ class _MemoryPageState extends State<MemoryPage> with TickerProviderStateMixin {
       duration: Duration(milliseconds: 1000),
       vsync: this,
     );
+    _calendarScrollController = ScrollController();
     _initializeSampleData();
-    // Speech-to-Text wird später implementiert
   }
 
   void _initializeSampleData() {
@@ -164,6 +231,7 @@ class _MemoryPageState extends State<MemoryPage> with TickerProviderStateMixin {
     _pulseController2.dispose();
     _speechController.dispose();
     _titleController.dispose();
+    _calendarScrollController.dispose();
     super.dispose();
   }
 
@@ -176,10 +244,89 @@ class _MemoryPageState extends State<MemoryPage> with TickerProviderStateMixin {
           memories = data.map((json) => Memory.fromJson(json)).toList();
           // Synchronisiere historyEntries mit den echten Daten
           _syncHistoryEntries();
+          // Berechne aktuelle Streak
+          currentStreak = calculateStreak();
         });
       }
     } catch (e) {
       print('Error fetching memories: $e');
+    }
+  }
+
+  Future<void> fetchQuestions() async {
+    try {
+      final response = await http.get(Uri.parse('${AppConfig.apiUrl.replaceAll('/memories', '')}/questions'));
+      if (response.statusCode == 200) {
+        final List<dynamic> data = json.decode(response.body);
+        setState(() {
+          questions = data.map((json) => Question.fromJson(json)).toList();
+        });
+      }
+    } catch (e) {
+      print('Error fetching questions: $e');
+      setState(() {
+        questions = []; // Leere Liste bei Fehler
+      });
+    }
+  }
+
+  Future<void> fetchDailySummaries() async {
+    try {
+      final response = await http.get(Uri.parse('${AppConfig.apiUrl.replaceAll('/memories', '')}/daily-summaries'));
+      if (response.statusCode == 200) {
+        final List<dynamic> data = json.decode(response.body);
+        setState(() {
+          dailySummaries = data.map((json) => DailySummary.fromJson(json)).toList();
+        });
+      }
+    } catch (e) {
+      print('Error fetching daily summaries: $e');
+      setState(() {
+        dailySummaries = [];
+      });
+    }
+  }
+
+  Future<void> fetchDailySummaryForDate(DateTime date) async {
+    try {
+      final dateString = '${date.year}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}';
+      final response = await http.get(Uri.parse('${AppConfig.apiUrl.replaceAll('/memories', '')}/daily-summaries/$dateString'));
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        setState(() {
+          currentDailySummary = DailySummary.fromJson(data);
+          showDailySummary = true;
+        });
+      } else {
+        setState(() {
+          currentDailySummary = null;
+          showDailySummary = true;
+        });
+      }
+    } catch (e) {
+      print('Error fetching daily summary: $e');
+      setState(() {
+        currentDailySummary = null;
+        showDailySummary = true;
+      });
+    }
+  }
+
+  Future<void> deleteMemory(int memoryId) async {
+    try {
+      final response = await http.delete(
+        Uri.parse('${AppConfig.apiUrl.replaceAll('/memories', '')}/memories/$memoryId'),
+      );
+      
+      if (response.statusCode == 200) {
+        // Memory erfolgreich gelöscht - lade Daten neu
+        await fetchMemories();
+        print('Memory successfully deleted');
+      } else {
+        print('Fehler beim Löschen der Memory: ${response.statusCode}');
+      }
+    } catch (e) {
+      print('Error deleting memory: $e');
     }
   }
 
@@ -190,7 +337,13 @@ class _MemoryPageState extends State<MemoryPage> with TickerProviderStateMixin {
         'id': memory.id,
         'title': memory.title,
         'content': memory.content,
-        'media_files': memory.mediaFiles.map((f) => f.toJson()).toList(),
+        'media_files': memory.mediaFiles.map((f) => {
+          'filename': f.filename,
+          'file_type': f.fileType,
+          'file_size': f.fileSize,
+          'duration': f.duration,
+          'created_at': DateTime.now().toIso8601String(), // Demo-Zeitstempel
+        }).toList(),
         'timestamp': memory.createdAt ?? DateTime.now(),
         'date': memory.createdAt ?? DateTime.now(),
       };
@@ -200,22 +353,45 @@ class _MemoryPageState extends State<MemoryPage> with TickerProviderStateMixin {
   Future<void> addMemory(String content, {String? title, List<MediaFile>? mediaFiles}) async {
     if (content.trim().isEmpty) return;
     
+    // Konvertiere simulierte Anhänge zu MediaFile-Objekten
+    final convertedMediaFiles = _simulatedMediaFiles.map((file) => MediaFile(
+      filename: file['filename'],
+      fileType: file['file_type'],
+      fileSize: file['file_size'],
+      duration: file['duration'],
+    )).toList();
+    
+    print('DEBUG: Simulierte Anhänge: ${_simulatedMediaFiles.length}');
+    print('DEBUG: Konvertierte Anhänge: ${convertedMediaFiles.length}');
+    
     final memory = Memory(
-      title: title ?? _generateTitle(content),
+      title: title ?? "",  // Erstmal leer - wird von KI generiert
       content: content,
-      mediaFiles: mediaFiles ?? _selectedMediaFiles,
+      mediaFiles: mediaFiles ?? convertedMediaFiles,
     );
     
     try {
+      // 1. Memory ohne Titel speichern
       final response = await http.post(
         Uri.parse(apiUrl),
         headers: {'Content-Type': 'application/json'},
         body: json.encode(memory.toJson()),
       );
+      
       if (response.statusCode == 200) {
+        final responseData = json.decode(response.body);
+        final memoryId = responseData['id'];
+        
+        // 2. KI-Titel generieren und zu Memory hinzufügen
+        await _generateAndSetTitle(memoryId, content);
+        
+        setState(() {
         _controller.clear();
-        _titleController.clear();
-        _selectedMediaFiles.clear();
+          _titleController.clear();
+          _selectedMediaFiles.clear();
+          _simulatedMediaFiles.clear(); // Lösche simulierte Anhänge nach dem Speichern
+        });
+        
         // Lade die Daten neu, damit sie in der Kalender-Ansicht erscheinen
         await fetchMemories();
       }
@@ -224,11 +400,33 @@ class _MemoryPageState extends State<MemoryPage> with TickerProviderStateMixin {
     }
   }
 
-  String _generateTitle(String content) {
-    // Erste 30 Zeichen als Titel verwenden
-    if (content.length <= 30) return content;
-    return content.substring(0, 30) + '...';
+  Future<void> _generateAndSetTitle(int memoryId, String content) async {
+    try {
+      // KI-Titel generieren
+      final titleResponse = await http.post(
+        Uri.parse('${AppConfig.apiUrl.replaceAll('/memories', '')}/generate-title'),
+        headers: {'Content-Type': 'application/json'},
+        body: json.encode({'content': content}),
+      );
+      
+      if (titleResponse.statusCode == 200) {
+        final titleData = json.decode(titleResponse.body);
+        final generatedTitle = titleData['generated_title'];
+        
+        // Titel zur Memory hinzufügen
+        await http.put(
+          Uri.parse('${AppConfig.apiUrl.replaceAll('/memories', '')}/memories/$memoryId/title'),
+          headers: {'Content-Type': 'application/json'},
+          body: json.encode({'content': content}),
+        );
+        
+        print('KI-Titel generiert und gesetzt: $generatedTitle');
+      }
+    } catch (e) {
+      print('Fehler bei KI-Titel-Generierung: $e');
+    }
   }
+
 
   // Media-Funktionen
   Future<void> _pickImage(ImageSource source) async {
@@ -242,7 +440,7 @@ class _MemoryPageState extends State<MemoryPage> with TickerProviderStateMixin {
           fileSize: await file.length(),
           localFile: file,
         );
-        setState(() {
+    setState(() {
           _selectedMediaFiles.add(mediaFile);
         });
       }
@@ -262,7 +460,7 @@ class _MemoryPageState extends State<MemoryPage> with TickerProviderStateMixin {
           fileSize: await file.length(),
           localFile: file,
         );
-        setState(() {
+    setState(() {
           _selectedMediaFiles.add(mediaFile);
         });
       }
@@ -313,6 +511,30 @@ class _MemoryPageState extends State<MemoryPage> with TickerProviderStateMixin {
   void _removeMediaFile(int index) {
     setState(() {
       _selectedMediaFiles.removeAt(index);
+    });
+  }
+
+  void _simulatePhotoCapture() {
+    setState(() {
+      _simulatedMediaFiles.add({
+        'filename': 'photo_${DateTime.now().millisecondsSinceEpoch}.jpg',
+        'file_type': 'image',
+        'file_size': 2048000, // 2MB
+        'duration': null,
+        'created_at': DateTime.now().toIso8601String(),
+      });
+    });
+  }
+
+  void _simulateVideoCapture() {
+    setState(() {
+      _simulatedMediaFiles.add({
+        'filename': 'video_${DateTime.now().millisecondsSinceEpoch}.mp4',
+        'file_type': 'video',
+        'file_size': 10240000, // 10MB
+        'duration': 45, // 45 Sekunden
+        'created_at': DateTime.now().toIso8601String(),
+      });
     });
   }
 
@@ -371,19 +593,6 @@ class _MemoryPageState extends State<MemoryPage> with TickerProviderStateMixin {
     });
   }
 
-  void startKeyboardPost() {
-    setState(() {
-      showPostEditor = true;
-      isListening = false;
-      _pulseController.stop();
-      _pulseController2.stop();
-      // Übertrage vorhandenen Text vom Controller
-      if (_controller.text.isNotEmpty) {
-        _speechController.text = _controller.text;
-        _recognizedText = _controller.text;
-      }
-    });
-  }
 
   void _simulateListening() async {
     // Simuliert Spracherkennung für Demo-Zwecke - wortweise
@@ -416,11 +625,7 @@ class _MemoryPageState extends State<MemoryPage> with TickerProviderStateMixin {
 
   void _sendPost() {
     if (_speechController.text.trim().isNotEmpty) {
-      addMemory(
-        _speechController.text,
-        title: _generateTitle(_speechController.text),
-        mediaFiles: _selectedMediaFiles,
-      );
+      addMemory(_speechController.text);
       _speechController.clear();
       _recognizedText = '';
       _selectedMediaFiles.clear();
@@ -451,19 +656,534 @@ class _MemoryPageState extends State<MemoryPage> with TickerProviderStateMixin {
     setState(() {
       isHistoryView = !isHistoryView;
       selectedDay = null; // Reset selected day when entering/exiting history
+      showDetailView = false; // Schließe Detail-Ansicht wenn Historie geschlossen wird
+      showDailySummary = false; // Schließe Tageszusammenfassung wenn Historie geschlossen wird
+    });
+    
+    // Kein automatisches Scrollen - der Kalender startet standardmäßig beim heutigen Tag (unten)
+  }
+
+
+
+  void openEntryDetail(Map<String, dynamic> entry) {
+    setState(() {
+      selectedEntry = entry;
+      showDetailView = true;
     });
   }
 
-  void _navigateToMonth(int direction) {
+  void closeEntryDetail() {
     setState(() {
-      currentMonth = DateTime(currentMonth.year, currentMonth.month + direction);
-      selectedDay = null;
+      showDetailView = false;
+      selectedEntry = null;
     });
+  }
+
+  void closeDailySummary() {
+    setState(() {
+      showDailySummary = false;
+      currentDailySummary = null;
+    });
+  }
+
+  // KI-Symbol Widget für wiederverwendbare Verwendung
+  Widget _buildAISymbol({double size = 16}) {
+    return Icon(
+      Icons.auto_awesome,
+      size: size,
+      color: Colors.purple[600],
+    );
+  }
+
+  // Untere Navigationsleiste
+  Widget _buildBottomNavigation() {
+    return Positioned(
+      bottom: 40,
+      left: 0,
+      right: 0,
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+        children: [
+          // Links: Kapitel des Lebens
+          GestureDetector(
+            onTap: () {
+              // TODO: Kapitel des Lebens Seite implementieren
+              print('Kapitel des Lebens - Coming Soon');
+            },
+            child: Container(
+              padding: EdgeInsets.all(isLargeMode ? 20 : 16),
+              decoration: BoxDecoration(
+                color: Colors.blue[100],
+                shape: BoxShape.circle,
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.blue[200]!,
+                    blurRadius: isLargeMode ? 12 : 8,
+                    spreadRadius: isLargeMode ? 3 : 2,
+                  ),
+                ],
+              ),
+              child: Icon(
+                Icons.menu_book,
+                size: isLargeMode ? 40 : 32,
+                color: Colors.blue[600],
+              ),
+            ),
+          ),
+          
+          // Mitte: Mikrofon (Navigation zur Startseite)
+          GestureDetector(
+            onTap: () {
+              // Zurück zur Startseite
+              setState(() {
+                isHistoryView = false;
+                showDetailView = false;
+                showDailySummary = false;
+                showPostEditor = false;
+              });
+            },
+            child: Container(
+              padding: EdgeInsets.all(isLargeMode ? 24 : 20),
+              decoration: BoxDecoration(
+                color: Colors.teal[100],
+                shape: BoxShape.circle,
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.teal[200]!,
+                    blurRadius: isLargeMode ? 12 : 8,
+                    spreadRadius: isLargeMode ? 3 : 2,
+                  ),
+                ],
+              ),
+              child: Icon(
+                Icons.mic_none,
+                size: isLargeMode ? 40 : 32,
+                color: Colors.teal[600],
+              ),
+            ),
+          ),
+          
+          // Rechts: Familienmitglieder
+          GestureDetector(
+            onTap: () {
+              // TODO: Familienmitglieder Seite implementieren
+              print('Familienmitglieder - Coming Soon');
+            },
+            child: Container(
+              padding: EdgeInsets.all(isLargeMode ? 20 : 16),
+              decoration: BoxDecoration(
+                color: Colors.green[100],
+                shape: BoxShape.circle,
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.green[200]!,
+                    blurRadius: isLargeMode ? 12 : 8,
+                    spreadRadius: isLargeMode ? 3 : 2,
+                  ),
+                ],
+              ),
+              child: Icon(
+                Icons.family_restroom,
+                size: isLargeMode ? 40 : 32,
+                color: Colors.green[600],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // Berechnet die aktuelle Streak (aufeinanderfolgende Tage mit Einträgen)
+  int calculateStreak() {
+    if (historyEntries.isEmpty) return 0;
+    
+    // Sortiere Einträge nach Datum (neueste zuerst)
+    final sortedEntries = List<Map<String, dynamic>>.from(historyEntries);
+    sortedEntries.sort((a, b) => b['timestamp'].compareTo(a['timestamp']));
+    
+    // Gruppiere Einträge nach Datum
+    final Map<String, List<Map<String, dynamic>>> entriesByDate = {};
+    for (var entry in sortedEntries) {
+      final date = entry['timestamp'].toIso8601String().split('T')[0];
+      if (!entriesByDate.containsKey(date)) {
+        entriesByDate[date] = [];
+      }
+      entriesByDate[date]!.add(entry);
+    }
+    
+    // Berechne Streak rückwärts vom heutigen Tag
+    final today = DateTime.now();
+    int streak = 0;
+    
+    // Zähle rückwärts vom heutigen Tag
+    for (int i = 0; i < 365; i++) {
+      final checkDate = today.subtract(Duration(days: i));
+      final dateString = checkDate.toIso8601String().split('T')[0];
+      
+      if (entriesByDate.containsKey(dateString)) {
+        streak++;
+      } else {
+        // Wenn heute noch keine Einträge hat, aber gestern welche hatte, zähle trotzdem
+        if (i == 0 && streak == 0) {
+          // Heute hat keine Einträge, aber prüfe ob gestern welche hatte
+          continue;
+        } else {
+          break; // Streak unterbrochen
+        }
+      }
+    }
+    
+    return streak;
+  }
+
+  // Blog-ähnliche Ansicht für Tageszusammenfassung
+  Widget _buildDailySummaryView() {
+    if (!showDailySummary) return SizedBox.shrink();
+    
+    final dayNames = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+    final monthNames = [
+      'January', 'February', 'March', 'April', 'May', 'June',
+      'July', 'August', 'September', 'October', 'November', 'December'
+    ];
+    
+    return Container(
+      color: Colors.grey[50],
+      child: Column(
+        children: [
+          // Header mit Zurück-Button
+          Container(
+            padding: EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              boxShadow: [BoxShadow(color: Colors.black12, blurRadius: 4)],
+            ),
+            child: Row(
+              children: [
+                GestureDetector(
+                  onTap: closeDailySummary,
+                  child: Container(
+                    padding: EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: Colors.grey[200],
+                      shape: BoxShape.circle,
+                    ),
+                    child: Icon(Icons.arrow_back, size: 24, color: Colors.grey[700]),
+                  ),
+                ),
+                SizedBox(width: 20),
+                Expanded(
+                  child: Text(
+                    'Daily Summary',
+                    style: TextStyle(
+                      fontSize: isLargeMode ? 24 : 20,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.grey[800],
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          
+          // Blog-Content
+          Expanded(
+            child: SingleChildScrollView(
+              padding: EdgeInsets.all(20),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  if (currentDailySummary != null) ...[
+                    // Datum-Header (Blog-Style)
+                    Container(
+                      width: double.infinity,
+                      padding: EdgeInsets.all(24),
+                      decoration: BoxDecoration(
+                        color: Colors.blue[50],
+                        borderRadius: BorderRadius.circular(16),
+                        border: Border.all(color: Colors.blue[200]!, width: 1),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            '${selectedDay!.day}. ${monthNames[selectedDay!.month - 1]} ${selectedDay!.year}',
+                            style: TextStyle(
+                              fontSize: isLargeMode ? 28 : 24,
+                              fontWeight: FontWeight.bold,
+                              color: Colors.blue[800],
+                            ),
+                          ),
+                          SizedBox(height: 8),
+                          Text(
+                            dayNames[selectedDay!.weekday - 1],
+                            style: TextStyle(
+                              fontSize: isLargeMode ? 18 : 16,
+                              color: Colors.blue[600],
+                              fontWeight: FontWeight.w500,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    
+                    SizedBox(height: 32),
+                    
+                    // Zusammenfassung-Text (Blog-Artikel-Style)
+                    Container(
+                      width: double.infinity,
+                      padding: EdgeInsets.all(32),
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        borderRadius: BorderRadius.circular(16),
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.black12,
+                            blurRadius: 12,
+                            spreadRadius: 2,
+                          ),
+                        ],
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          // Artikel-Titel
+                          Text(
+                            'My Day in Words',
+                            style: TextStyle(
+                              fontSize: isLargeMode ? 22 : 20,
+                              fontWeight: FontWeight.bold,
+                              color: Colors.grey[800],
+                              letterSpacing: 0.5,
+                            ),
+                          ),
+                          
+                          SizedBox(height: 24),
+                          
+                          // Artikel-Text
+                          Text(
+                            currentDailySummary!.summary,
+                            style: TextStyle(
+                              fontSize: isLargeMode ? 18 : 16,
+                              color: Colors.grey[700],
+                              height: 1.6,
+                              letterSpacing: 0.3,
+                            ),
+                          ),
+                          
+                          SizedBox(height: 32),
+                          
+                          // Artikel-Footer
+                          Container(
+                            padding: EdgeInsets.symmetric(vertical: 16, horizontal: 20),
+                            decoration: BoxDecoration(
+                              color: Colors.grey[100],
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            child: Row(
+                              children: [
+                                _buildAISymbol(size: isLargeMode ? 20 : 18),
+                                SizedBox(width: 12),
+                                Text(
+                                  'AI-Generated Summary',
+                                  style: TextStyle(
+                                    fontSize: isLargeMode ? 14 : 12,
+                                    color: Colors.grey[600],
+                                    fontWeight: FontWeight.w500,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ] else ...[
+                    // Keine Zusammenfassung vorhanden
+                    Container(
+                      width: double.infinity,
+                      padding: EdgeInsets.all(40),
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        borderRadius: BorderRadius.circular(16),
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.black12,
+                            blurRadius: 12,
+                            spreadRadius: 2,
+                          ),
+                        ],
+                      ),
+                      child: Column(
+                        children: [
+                          Icon(
+                            Icons.auto_stories_outlined,
+                            size: isLargeMode ? 80 : 64,
+                            color: Colors.grey[400],
+                          ),
+                          SizedBox(height: 24),
+                          Text(
+                            'No Daily Summary Available',
+                            style: TextStyle(
+                              fontSize: isLargeMode ? 20 : 18,
+                              fontWeight: FontWeight.bold,
+                              color: Colors.grey[600],
+                            ),
+                            textAlign: TextAlign.center,
+                          ),
+                          SizedBox(height: 12),
+                          Text(
+                            'No AI-generated summary has been created for this day yet.',
+                            style: TextStyle(
+                              fontSize: isLargeMode ? 16 : 14,
+                              color: Colors.grey[500],
+                            ),
+                            textAlign: TextAlign.center,
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // Generiert alle Monate von Januar bis zum aktuellen Monat
+  List<DateTime> _generateMonths() {
+    final now = DateTime.now();
+    final months = <DateTime>[];
+    
+    // Starte vom aktuellen Monat und gehe rückwärts zu Januar
+    for (int month = now.month; month >= 1; month--) {
+      months.add(DateTime(now.year, month));
+    }
+    
+    return months;
+  }
+
+  // Hilfsfunktionen für den Kalender
+  int _getFirstDayOfWeek(DateTime month) {
+    final firstDay = DateTime(month.year, month.month, 1);
+    return (firstDay.weekday - 1) % 7; // Montag = 0, Sonntag = 6
+  }
+
+  int _getDaysInMonth(DateTime month) {
+    return DateTime(month.year, month.month + 1, 0).day;
+  }
+
+  bool _isToday(DateTime date) {
+    final now = DateTime.now();
+    return date.year == now.year && 
+           date.month == now.month && 
+           date.day == now.day;
+  }
+
+  // Erstellt ein Grid nur mit vergangenen Tagen, umgekehrt sortiert (neueste zuerst)
+  Widget _buildPastDaysGrid(DateTime month, List<Map<String, dynamic>> monthEntries) {
+    final now = DateTime.now();
+    final pastDays = <int>[];
+    
+    // Sammle alle vergangenen Tage des Monats
+    for (int day = 1; day <= _getDaysInMonth(month); day++) {
+      final currentDay = DateTime(month.year, month.month, day);
+      if (!currentDay.isAfter(now)) {
+        pastDays.add(day);
+      }
+    }
+    
+    // Sortiere umgekehrt (neueste Tage zuerst)
+    pastDays.sort((a, b) => b.compareTo(a));
+    
+    return GridView.builder(
+      shrinkWrap: true,
+      physics: NeverScrollableScrollPhysics(),
+      gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+        crossAxisCount: 7,
+        childAspectRatio: 1.0,
+        crossAxisSpacing: 8,
+        mainAxisSpacing: 8,
+      ),
+      itemCount: pastDays.length,
+      itemBuilder: (context, index) {
+        final day = pastDays[index];
+        final currentDay = DateTime(month.year, month.month, day);
+        final hasEntries = monthEntries.any((entry) => 
+          entry['timestamp'].year == currentDay.year &&
+          entry['timestamp'].month == currentDay.month &&
+          entry['timestamp'].day == currentDay.day
+        );
+        final isToday = _isToday(currentDay);
+        
+        return GestureDetector(
+          onTap: () => _selectDay(currentDay),
+          child: Container(
+            decoration: BoxDecoration(
+              color: isToday 
+                  ? Colors.orange[100] 
+                  : hasEntries 
+                      ? Colors.teal[100] 
+                      : Colors.white,
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(
+                color: isToday 
+                    ? Colors.orange[400]! 
+                    : hasEntries 
+                        ? Colors.teal[300]! 
+                        : Colors.grey[300]!,
+                width: isToday ? 3 : 1,
+              ),
+              boxShadow: isToday ? [
+                BoxShadow(
+                  color: Colors.orange[200]!,
+                  blurRadius: 8,
+                  spreadRadius: 2,
+                ),
+              ] : null,
+            ),
+            child: Center(
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Text(
+                    day.toString(),
+                    style: TextStyle(
+                      fontSize: isLargeMode ? 18 : 16,
+                      fontWeight: FontWeight.bold,
+                      color: isToday 
+                          ? Colors.orange[800] 
+                          : hasEntries 
+                              ? Colors.teal[800] 
+                              : Colors.grey[800],
+                    ),
+                  ),
+                  if (hasEntries)
+                    Container(
+                      margin: EdgeInsets.only(top: 2),
+                      width: 6,
+                      height: 6,
+                      decoration: BoxDecoration(
+                        color: isToday ? Colors.orange[600] : Colors.teal[600],
+                        shape: BoxShape.circle,
+                      ),
+                    ),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
   }
 
   void _selectDay(DateTime day) {
     setState(() {
       selectedDay = day;
+      showDetailView = false; // Schließe Detail-Ansicht wenn neuer Tag gewählt wird
     });
   }
 
@@ -471,6 +1191,35 @@ class _MemoryPageState extends State<MemoryPage> with TickerProviderStateMixin {
     setState(() {
       selectedDay = null;
     });
+  }
+
+  void _goToPreviousDay() {
+    if (selectedDay != null) {
+      setState(() {
+        selectedDay = selectedDay!.subtract(Duration(days: 1));
+      });
+    }
+  }
+
+  void _goToNextDay() {
+    if (selectedDay != null) {
+      final today = DateTime.now();
+      final tomorrow = selectedDay!.add(Duration(days: 1));
+      
+      // Nur erlauben bis zum heutigen Tag
+      if (tomorrow.isBefore(today) || tomorrow.isAtSameMomentAs(today)) {
+        setState(() {
+          selectedDay = tomorrow;
+        });
+      }
+    }
+  }
+
+  bool _canGoToNextDay() {
+    if (selectedDay == null) return false;
+    final today = DateTime.now();
+    final tomorrow = selectedDay!.add(Duration(days: 1));
+    return tomorrow.isBefore(today) || tomorrow.isAtSameMomentAs(today);
   }
 
   List<Map<String, dynamic>> _getEntriesForDay(DateTime day) {
@@ -491,17 +1240,6 @@ class _MemoryPageState extends State<MemoryPage> with TickerProviderStateMixin {
         .toList();
   }
 
-  List<DateTime> _getDaysInMonth(DateTime month) {
-    final firstDay = DateTime(month.year, month.month, 1);
-    final lastDay = DateTime(month.year, month.month + 1, 0);
-    final daysInMonth = lastDay.day;
-    
-    List<DateTime> days = [];
-    for (int i = 1; i <= daysInMonth; i++) {
-      days.add(DateTime(month.year, month.month, i));
-    }
-    return days;
-  }
 
   void toggleSizeMode() {
     setState(() {
@@ -510,28 +1248,37 @@ class _MemoryPageState extends State<MemoryPage> with TickerProviderStateMixin {
   }
 
   Widget _buildHistoryView() {
-    if (selectedDay != null) {
-      return _buildDayView();
-    } else {
-      return _buildCalendarView();
-    }
+    return Stack(
+      children: [
+        if (selectedDay != null)
+          _buildDayView()
+        else
+          _buildCalendarView(),
+        
+        // Untere Navigationsleiste auch in der Historie
+        _buildBottomNavigation(),
+      ],
+    );
   }
 
   Widget _buildCalendarView() {
-    final monthEntries = _getEntriesForMonth(currentMonth);
-    final daysInMonth = _getDaysInMonth(currentMonth);
+    return _buildScrollableCalendar();
+  }
+
+  Widget _buildScrollableCalendar() {
+    final months = _generateMonths();
     final monthNames = [
-      'Januar', 'Februar', 'März', 'April', 'Mai', 'Juni',
-      'Juli', 'August', 'September', 'Oktober', 'November', 'Dezember'
+      'January', 'February', 'March', 'April', 'May', 'June',
+      'July', 'August', 'September', 'October', 'November', 'December'
     ];
 
     return Container(
       color: Colors.grey[50],
       child: Column(
         children: [
-          // Header mit Zurück-Button und Monats-Navigation
+          // Header mit Zurück-Button
           Container(
-            padding: EdgeInsets.symmetric(horizontal: 20, vertical: 20),
+            padding: EdgeInsets.symmetric(horizontal: 20, vertical: 16),
             decoration: BoxDecoration(
               color: Colors.white,
               boxShadow: [BoxShadow(color: Colors.black12, blurRadius: 4)],
@@ -552,105 +1299,69 @@ class _MemoryPageState extends State<MemoryPage> with TickerProviderStateMixin {
                 SizedBox(width: 20),
                 Expanded(
                   child: Text(
-                    '${monthNames[currentMonth.month - 1]} ${currentMonth.year}',
+                    'My Memories',
                     style: TextStyle(
                       fontSize: isLargeMode ? 24 : 20,
                       fontWeight: FontWeight.bold,
-                      color: Colors.teal[400],
+                      color: Colors.grey[800],
                     ),
-                    textAlign: TextAlign.center,
                   ),
                 ),
-                GestureDetector(
-                  onTap: () => _navigateToMonth(-1),
-                  child: Container(
-                    padding: EdgeInsets.all(12),
-                    decoration: BoxDecoration(
-                      color: Colors.grey[200],
-                      shape: BoxShape.circle,
-                    ),
-                    child: Icon(Icons.chevron_left, size: 24, color: Colors.grey[700]),
+                // "Heute"-Button (nur visuell, kein Scrollen)
+                Container(
+                  padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                  decoration: BoxDecoration(
+                    color: Colors.teal[100],
+                    borderRadius: BorderRadius.circular(20),
+                    border: Border.all(color: Colors.teal[300]!, width: 1),
                   ),
-                ),
-                SizedBox(width: 10),
-                GestureDetector(
-                  onTap: () => _navigateToMonth(1),
-                  child: Container(
-                    padding: EdgeInsets.all(12),
-                    decoration: BoxDecoration(
-                      color: Colors.grey[200],
-                      shape: BoxShape.circle,
+                  child: Text(
+                    'Today',
+                    style: TextStyle(
+                      fontSize: isLargeMode ? 16 : 14,
+                      fontWeight: FontWeight.w600,
+                      color: Colors.teal[700],
                     ),
-                    child: Icon(Icons.chevron_right, size: 24, color: Colors.grey[700]),
                   ),
                 ),
               ],
             ),
           ),
-          // Kalender-Grid
+          // Scrollbarer Kalender
           Expanded(
-            child: Padding(
+            child: ListView.builder(
+              controller: _calendarScrollController,
               padding: EdgeInsets.all(20),
-              child: GridView.builder(
-                gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-                  crossAxisCount: 7,
-                  childAspectRatio: 1,
-                  crossAxisSpacing: 8,
-                  mainAxisSpacing: 8,
-                ),
-                itemCount: daysInMonth.length,
-                itemBuilder: (context, index) {
-                  final day = daysInMonth[index];
-                  final hasEntries = monthEntries.any((entry) => 
-                      entry['date'].day == day.day);
-                  final isToday = day.day == DateTime.now().day && 
-                                 day.month == DateTime.now().month && 
-                                 day.year == DateTime.now().year;
-                  
-                  return GestureDetector(
-                    onTap: () => _selectDay(day),
-                    child: Container(
-                      decoration: BoxDecoration(
-                        color: isToday 
-                            ? Colors.orange[200]  // Heute: Orange Hintergrund
-                            : hasEntries 
-                                ? Colors.teal[100] 
-                                : Colors.grey[50],
-                        borderRadius: BorderRadius.circular(8),
-                        border: Border.all(
-                          color: isToday 
-                              ? Colors.orange[600]!  // Heute: Orange Border
-                              : hasEntries 
-                                  ? Colors.teal[300]! 
-                                  : Colors.grey[300]!,
-                          width: isToday ? 3 : 1,  // Heute: Dickerer Border
-                        ),
-                        boxShadow: isToday ? [
-                          BoxShadow(
-                            color: Colors.orange[300]!.withOpacity(0.5),
-                            blurRadius: 8,
-                            spreadRadius: 2,
-                          ),
-                        ] : null,
-                      ),
-                      child: Center(
+              itemCount: months.length,
+              itemBuilder: (context, monthIndex) {
+                final month = months[monthIndex];
+                final monthEntries = _getEntriesForMonth(month);
+                final daysInMonthCount = _getDaysInMonth(month);
+                
+                return Container(
+                  margin: EdgeInsets.only(bottom: 30),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      // Monats-Header
+                      Padding(
+                        padding: EdgeInsets.only(bottom: 16),
                         child: Text(
-                          '${day.day}',
+                          '${monthNames[month.month - 1]} ${month.year}',
                           style: TextStyle(
-                            fontSize: isLargeMode ? 18 : 16,
-                            fontWeight: isToday ? FontWeight.bold : (hasEntries ? FontWeight.w600 : FontWeight.normal),
-                            color: isToday 
-                                ? Colors.orange[800]!  // Heute: Dunkelorange Text
-                                : hasEntries 
-                                    ? Colors.teal[700] 
-                                    : Colors.grey[700],
+                            fontSize: isLargeMode ? 22 : 20,
+                            fontWeight: FontWeight.bold,
+                            color: Colors.grey[800],
                           ),
                         ),
                       ),
-                    ),
-                  );
-                },
-              ),
+                      
+                            // Kalender-Grid für diesen Monat - nur vergangene Tage, umgekehrt sortiert
+                            _buildPastDaysGrid(month, monthEntries),
+                    ],
+                  ),
+                );
+              },
             ),
           ),
         ],
@@ -660,10 +1371,10 @@ class _MemoryPageState extends State<MemoryPage> with TickerProviderStateMixin {
 
   Widget _buildDayView() {
     final dayEntries = _getEntriesForDay(selectedDay!);
-    final dayNames = ['Montag', 'Dienstag', 'Mittwoch', 'Donnerstag', 'Freitag', 'Samstag', 'Sonntag'];
+    final dayNames = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
     final monthNames = [
-      'Januar', 'Februar', 'März', 'April', 'Mai', 'Juni',
-      'Juli', 'August', 'September', 'Oktober', 'November', 'Dezember'
+      'January', 'February', 'March', 'April', 'May', 'June',
+      'July', 'August', 'September', 'October', 'November', 'December'
     ];
     
     return Container(
@@ -691,6 +1402,23 @@ class _MemoryPageState extends State<MemoryPage> with TickerProviderStateMixin {
                   ),
                 ),
                 SizedBox(width: 20),
+                // Linker Pfeil (vorheriger Tag)
+                GestureDetector(
+                  onTap: _goToPreviousDay,
+                  child: Container(
+                    padding: EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: Colors.teal[100],
+                      shape: BoxShape.circle,
+                    ),
+                    child: Icon(
+                      Icons.chevron_left,
+                      size: isLargeMode ? 28 : 24,
+                      color: Colors.teal[600],
+                    ),
+                  ),
+                ),
+                SizedBox(width: 16),
                 Expanded(
                   child: Text(
                     '${dayNames[selectedDay!.weekday - 1]}, ${selectedDay!.day}. ${monthNames[selectedDay!.month - 1]} ${selectedDay!.year}',
@@ -702,6 +1430,40 @@ class _MemoryPageState extends State<MemoryPage> with TickerProviderStateMixin {
                     textAlign: TextAlign.center,
                   ),
                 ),
+                SizedBox(width: 16),
+                // Rechter Pfeil (nächster Tag)
+                GestureDetector(
+                  onTap: _goToNextDay,
+                  child: Container(
+                    padding: EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: _canGoToNextDay() ? Colors.teal[100] : Colors.grey[200],
+                      shape: BoxShape.circle,
+                    ),
+                    child: Icon(
+                      Icons.chevron_right,
+                      size: isLargeMode ? 28 : 24,
+                      color: _canGoToNextDay() ? Colors.teal[600] : Colors.grey[400],
+                    ),
+                  ),
+                ),
+                SizedBox(width: 20),
+                // Tageszusammenfassung-Button
+                GestureDetector(
+                  onTap: () => fetchDailySummaryForDate(selectedDay!),
+                  child: Container(
+                    padding: EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: Colors.blue[100],
+                      shape: BoxShape.circle,
+                    ),
+                    child: Icon(
+                      Icons.auto_stories,
+                      size: isLargeMode ? 24 : 20,
+                      color: Colors.blue[600],
+                    ),
+                  ),
+                ),
               ],
             ),
           ),
@@ -710,7 +1472,7 @@ class _MemoryPageState extends State<MemoryPage> with TickerProviderStateMixin {
             child: dayEntries.isEmpty
                 ? Center(
                     child: Text(
-                      'Keine Einträge für diesen Tag',
+                      'No entries for this day',
                       style: TextStyle(
                         fontSize: isLargeMode ? 20 : 18,
                         color: Colors.grey[600],
@@ -723,116 +1485,110 @@ class _MemoryPageState extends State<MemoryPage> with TickerProviderStateMixin {
                     itemBuilder: (context, index) {
                       final entry = dayEntries[index];
                       final time = entry['timestamp'] as DateTime;
+                      final hasMedia = entry['media_files'] != null && (entry['media_files'] as List).isNotEmpty;
                       
-                      return Container(
-                        margin: EdgeInsets.only(bottom: 16),
-                        padding: EdgeInsets.all(20),
-                        decoration: BoxDecoration(
-                          color: Colors.white,
-                          borderRadius: BorderRadius.circular(12),
-                          boxShadow: [
-                            BoxShadow(
-                              color: Colors.black12,
-                              blurRadius: 8,
-                              spreadRadius: 2,
-                            ),
-                          ],
-                        ),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
+                      return GestureDetector(
+                        onTap: () => openEntryDetail(entry),
+                        child: Container(
+                          margin: EdgeInsets.only(bottom: 12),
+                          padding: EdgeInsets.all(16),
+                          decoration: BoxDecoration(
+                            color: Colors.white,
+                            borderRadius: BorderRadius.circular(16),
+                            boxShadow: [
+                              BoxShadow(
+                                color: Colors.black12,
+                                blurRadius: 8,
+                                spreadRadius: 2,
+                              ),
+                            ],
+                          ),
+                        child: Row(
                           children: [
                             // Zeitstempel
-                            Text(
-                              '${time.hour.toString().padLeft(2, '0')}:${time.minute.toString().padLeft(2, '0')}',
-                              style: TextStyle(
-                                fontSize: isLargeMode ? 18 : 16,
-                                fontWeight: FontWeight.bold,
-                                color: Colors.teal[600],
+                            Container(
+                              padding: EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                              decoration: BoxDecoration(
+                                color: Colors.teal[100],
+                                borderRadius: BorderRadius.circular(12),
                               ),
-                            ),
-                            SizedBox(height: 8),
-                            // Titel
-                            if (entry['title'] != null && entry['title'].toString().isNotEmpty)
-                              Text(
-                                entry['title'],
-                                style: TextStyle(
-                                  fontSize: isLargeMode ? 20 : 18,
-                                  fontWeight: FontWeight.bold,
-                                  color: Colors.grey[800],
-                                ),
-                              ),
-                            if (entry['title'] != null && entry['title'].toString().isNotEmpty)
-                              SizedBox(height: 8),
-                            // Inhalt
-                            Text(
-                              entry['content'],
-                              style: TextStyle(
-                                fontSize: isLargeMode ? 18 : 16,
-                                color: Colors.grey[800],
-                              ),
-                            ),
-                            // Media-Anhänge
-                            if (entry['media_files'] != null && (entry['media_files'] as List).isNotEmpty) ...[
-                              SizedBox(height: 12),
-                              Text(
-                                'Anhänge:',
+                              child: Text(
+                                '${time.hour.toString().padLeft(2, '0')}:${time.minute.toString().padLeft(2, '0')}',
                                 style: TextStyle(
                                   fontSize: isLargeMode ? 16 : 14,
                                   fontWeight: FontWeight.bold,
-                                  color: Colors.grey[600],
+                                  color: Colors.teal[700],
                                 ),
                               ),
-                              SizedBox(height: 8),
-                              Wrap(
-                                spacing: 8,
-                                runSpacing: 8,
-                                children: (entry['media_files'] as List).map<Widget>((media) {
-                                  return Container(
-                                    padding: EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                                    decoration: BoxDecoration(
-                                      color: _getMediaColor(media['file_type']).withOpacity(0.1),
-                                      borderRadius: BorderRadius.circular(8),
-                                      border: Border.all(
-                                        color: _getMediaColor(media['file_type']).withOpacity(0.3),
-                                        width: 1,
+                            ),
+                            SizedBox(width: 12),
+                            // Inhalt (Vorschau)
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  // Titel oder Anfang des Inhalts
+                                  Text(
+                                    entry['title'] != null && entry['title'].toString().isNotEmpty
+                                        ? entry['title']
+                                        : entry['content'].length > 50
+                                            ? '${entry['content'].substring(0, 50)}...'
+                                            : entry['content'],
+                                    style: TextStyle(
+                                      fontSize: isLargeMode ? 16 : 14,
+                                      fontWeight: FontWeight.w600,
+                                      color: Colors.grey[800],
+                                    ),
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                  if (entry['title'] != null && entry['title'].toString().isNotEmpty)
+                                    Text(
+                                      entry['content'].length > 30
+                                          ? '${entry['content'].substring(0, 30)}...'
+                                          : entry['content'],
+                                      style: TextStyle(
+                                        fontSize: isLargeMode ? 14 : 12,
+                                        color: Colors.grey[600],
                                       ),
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
                                     ),
-                                    child: Row(
-                                      mainAxisSize: MainAxisSize.min,
-                                      children: [
-                                        Icon(
-                                          _getMediaIcon(media['file_type']),
-                                          size: isLargeMode ? 20 : 16,
-                                          color: _getMediaColor(media['file_type']),
-                                        ),
-                                        SizedBox(width: 6),
-                                        Text(
-                                          media['filename'],
-                                          style: TextStyle(
-                                            fontSize: isLargeMode ? 14 : 12,
-                                            color: _getMediaColor(media['file_type']),
-                                            fontWeight: FontWeight.w500,
-                                          ),
-                                        ),
-                                        if (media['duration'] != null) ...[
-                                          SizedBox(width: 4),
-                                          Text(
-                                            '(${_formatDuration(media['duration'])})',
-                                            style: TextStyle(
-                                              fontSize: isLargeMode ? 12 : 10,
-                                              color: Colors.grey[600],
-                                            ),
-                                          ),
-                                        ],
-                                      ],
+                                ],
+                              ),
+                            ),
+                            // Media-Indikatoren
+                            if (hasMedia) ...[
+                              SizedBox(width: 8),
+                              Row(
+                                children: [
+                                  Icon(
+                                    Icons.attach_file,
+                                    size: isLargeMode ? 20 : 16,
+                                    color: Colors.teal[600],
+                                  ),
+                                  SizedBox(width: 4),
+                                  Text(
+                                    '${(entry['media_files'] as List).length}',
+                                    style: TextStyle(
+                                      fontSize: isLargeMode ? 14 : 12,
+                                      fontWeight: FontWeight.bold,
+                                      color: Colors.teal[600],
                                     ),
-                                  );
-                                }).toList(),
+                                  ),
+                                ],
                               ),
                             ],
+                            // Pfeil-Icon
+                            SizedBox(width: 8),
+                            Icon(
+                              Icons.chevron_right,
+                              size: isLargeMode ? 24 : 20,
+                              color: Colors.grey[400],
+                            ),
                           ],
                         ),
-                      );
+                      ));
                     },
                   ),
           ),
@@ -869,7 +1625,7 @@ class _MemoryPageState extends State<MemoryPage> with TickerProviderStateMixin {
                 children: [
                   Expanded(
                     child: Text(
-                      isListening ? 'Zuhören...' : 'Neuen Post erstellen',
+                      isListening ? 'Listening...' : 'New Post...',
                       style: TextStyle(
                         fontSize: isLargeMode ? 20 : 18,
                         fontWeight: FontWeight.bold,
@@ -895,29 +1651,64 @@ class _MemoryPageState extends State<MemoryPage> with TickerProviderStateMixin {
                 ],
               ),
               SizedBox(height: 15),
-              // Text-Eingabe
-              TextField(
-                controller: _speechController,
-                maxLines: 3,
-                onTap: () {
-                  if (isListening) {
-                    _stopListening();
-                  }
-                },
-                decoration: InputDecoration(
-                  hintText: isListening 
-                      ? 'Gesprochener Text erscheint hier...' 
-                      : 'Text eingeben...',
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12),
-                    borderSide: BorderSide(color: Colors.grey[300]!),
+              // Text-Eingabe mit Mikrofon
+              Row(
+                children: [
+                  Expanded(
+                    child: TextField(
+                      controller: _speechController,
+                      maxLines: 3,
+                      onTap: () {
+                        if (isListening) {
+                          _stopListening();
+                        }
+                      },
+                      decoration: InputDecoration(
+                        hintText: isListening 
+                            ? 'Gesprochener Text erscheint hier...' 
+                            : 'Text eingeben...',
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(12),
+                          borderSide: BorderSide(color: Colors.grey[300]!),
+                        ),
+                        focusedBorder: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(12),
+                          borderSide: BorderSide(color: Colors.teal[400]!),
+                        ),
+                      ),
+                      style: TextStyle(fontSize: isLargeMode ? 20 : 18),
+                    ),
                   ),
-                  focusedBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12),
-                    borderSide: BorderSide(color: Colors.teal[400]!),
-                  ),
-                ),
-                style: TextStyle(fontSize: isLargeMode ? 20 : 18),
+                  SizedBox(width: 12),
+                  // Mikrofon-Icon (nur wenn nicht zuhörend)
+                  if (!isListening)
+                    GestureDetector(
+                      onTap: () {
+                        setState(() {
+                          isListening = true;
+                          _pulseController.repeat();
+                          _pulseController2.repeat();
+                        });
+                        _simulateListening();
+                      },
+                      child: Container(
+                        padding: EdgeInsets.all(isLargeMode ? 16 : 12),
+                        decoration: BoxDecoration(
+                          color: Colors.teal[100],
+                          shape: BoxShape.circle,
+                          border: Border.all(
+                            color: Colors.teal[300]!,
+                            width: 2,
+                          ),
+                        ),
+                        child: Icon(
+                          Icons.mic,
+                          size: isLargeMode ? 28 : 24,
+                          color: Colors.teal[600],
+                        ),
+                      ),
+                    ),
+                ],
               ),
               SizedBox(height: 15),
               // Media-Anhänge und Senden-Button in einer Zeile
@@ -973,7 +1764,7 @@ class _MemoryPageState extends State<MemoryPage> with TickerProviderStateMixin {
                     child: ElevatedButton.icon(
                       onPressed: _sendPost,
                       icon: Icon(Icons.send, size: 24),
-                      label: Text('Senden', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                      label: Text('Send', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
                       style: ElevatedButton.styleFrom(
                         backgroundColor: Colors.teal[400],
                         foregroundColor: Colors.white,
@@ -999,13 +1790,18 @@ class _MemoryPageState extends State<MemoryPage> with TickerProviderStateMixin {
                 SizedBox(height: 16),
                 _buildSelectedMediaFiles(),
               ],
+              
+              // Simulierte Media-Dateien (wenn vorhanden)
+              if (_simulatedMediaFiles.isNotEmpty) ...[
+                SizedBox(height: 16),
+                _buildSimulatedMediaFiles(),
+              ],
             ],
           ),
         ),
         
-        // Mikrofon-Animation oder Tastatur (unten)
+        // Mikrofon-Animation (unten)
         if (isListening) _buildMicrophoneAnimation(),
-        if (!isListening) _buildSimulatedKeyboard(),
       ],
     );
   }
@@ -1087,190 +1883,6 @@ class _MemoryPageState extends State<MemoryPage> with TickerProviderStateMixin {
     );
   }
 
-  Widget _buildSimulatedKeyboard() {
-    return Expanded(
-      child: Container(
-        margin: EdgeInsets.all(20),
-        decoration: BoxDecoration(
-          color: Colors.grey[200],
-          borderRadius: BorderRadius.circular(20),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black26,
-              blurRadius: 15,
-              spreadRadius: 2,
-            ),
-          ],
-        ),
-        child: Column(
-          children: [
-            // Tastatur-Header
-            Container(
-              padding: EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-              decoration: BoxDecoration(
-                color: Colors.grey[300],
-                borderRadius: BorderRadius.only(
-                  topLeft: Radius.circular(20),
-                  topRight: Radius.circular(20),
-                ),
-              ),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  Text(
-                    'Tastatur',
-                    style: TextStyle(
-                      fontSize: isLargeMode ? 18 : 16,
-                      fontWeight: FontWeight.w600,
-                      color: Colors.grey[700],
-                    ),
-                  ),
-                  Container(
-                    padding: EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-                    decoration: BoxDecoration(
-                      color: Colors.grey[400],
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    child: Text(
-                      'Simulation',
-                      style: TextStyle(
-                        fontSize: isLargeMode ? 12 : 10,
-                        fontWeight: FontWeight.w500,
-                        color: Colors.white,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            
-            // Tastatur-Body
-            Expanded(
-              child: Padding(
-                padding: EdgeInsets.all(16),
-                child: Column(
-                  children: [
-                    // Erste Reihe: Q W E R T Z U I O P
-                    _buildKeyboardRow(['Q', 'W', 'E', 'R', 'T', 'Z', 'U', 'I', 'O', 'P']),
-                    SizedBox(height: 8),
-                    
-                    // Zweite Reihe: A S D F G H J K L
-                    _buildKeyboardRow(['A', 'S', 'D', 'F', 'G', 'H', 'J', 'K', 'L'], isOffset: true),
-                    SizedBox(height: 8),
-                    
-                    // Dritte Reihe: Y X C V B N M
-                    _buildKeyboardRow(['Y', 'X', 'C', 'V', 'B', 'N', 'M'], isOffset: true),
-                    SizedBox(height: 12),
-                    
-                    // Vierte Reihe: Leertaste und Funktionstasten
-                    Row(
-                      children: [
-                        // 123-Taste
-                        _buildSpecialKey('123', isWide: true),
-                        SizedBox(width: 8),
-                        
-                        // Leertaste
-                        Expanded(
-                          child: Container(
-                            height: isLargeMode ? 50 : 40,
-                            decoration: BoxDecoration(
-                              color: Colors.grey[100],
-                              borderRadius: BorderRadius.circular(8),
-                              border: Border.all(color: Colors.grey[400]!, width: 1),
-                            ),
-                            child: Center(
-                              child: Text(
-                                'Leertaste',
-                                style: TextStyle(
-                                  fontSize: isLargeMode ? 16 : 14,
-                                  fontWeight: FontWeight.w500,
-                                  color: Colors.grey[600],
-                                ),
-                              ),
-                            ),
-                          ),
-                        ),
-                        SizedBox(width: 8),
-                        
-                        // Return-Taste
-                        _buildSpecialKey('Return', isWide: true),
-                      ],
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildKeyboardRow(List<String> keys, {bool isOffset = false}) {
-    return Row(
-      children: [
-        if (isOffset) SizedBox(width: 20), // Offset für zweite und dritte Reihe
-        ...keys.map((key) => Expanded(
-          child: Container(
-            margin: EdgeInsets.symmetric(horizontal: 2),
-            height: isLargeMode ? 50 : 40,
-            decoration: BoxDecoration(
-              color: Colors.white,
-              borderRadius: BorderRadius.circular(8),
-              border: Border.all(color: Colors.grey[300]!, width: 1),
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.black12,
-                  blurRadius: 2,
-                  offset: Offset(0, 1),
-                ),
-              ],
-            ),
-            child: Center(
-              child: Text(
-                key,
-                style: TextStyle(
-                  fontSize: isLargeMode ? 18 : 16,
-                  fontWeight: FontWeight.w600,
-                  color: Colors.grey[800],
-                ),
-              ),
-            ),
-          ),
-        )).toList(),
-        if (isOffset) SizedBox(width: 20), // Offset für zweite und dritte Reihe
-      ],
-    );
-  }
-
-  Widget _buildSpecialKey(String text, {bool isWide = false}) {
-    return Container(
-      width: isWide ? (isLargeMode ? 80 : 60) : (isLargeMode ? 50 : 40),
-      height: isLargeMode ? 50 : 40,
-      decoration: BoxDecoration(
-        color: Colors.grey[100],
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: Colors.grey[400]!, width: 1),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black12,
-            blurRadius: 2,
-            offset: Offset(0, 1),
-          ),
-        ],
-      ),
-      child: Center(
-        child: Text(
-          text,
-          style: TextStyle(
-            fontSize: isLargeMode ? 14 : 12,
-            fontWeight: FontWeight.w500,
-            color: Colors.grey[600],
-          ),
-        ),
-      ),
-    );
-  }
 
   Widget _buildMainInterface() {
     return Center(
@@ -1303,6 +1915,298 @@ class _MemoryPageState extends State<MemoryPage> with TickerProviderStateMixin {
         ),
       ),
     );
+  }
+
+  Widget _buildEntryDetailView() {
+    if (selectedEntry == null) return SizedBox.shrink();
+    
+    final time = selectedEntry!['timestamp'] as DateTime;
+    final hasMedia = selectedEntry!['media_files'] != null && (selectedEntry!['media_files'] as List).isNotEmpty;
+    
+    return Container(
+      color: Colors.grey[50],
+      child: Column(
+        children: [
+          // Header mit Zurück-Button
+          Container(
+            padding: EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              boxShadow: [BoxShadow(color: Colors.black12, blurRadius: 4)],
+            ),
+            child: Row(
+              children: [
+                GestureDetector(
+                  onTap: closeEntryDetail,
+                  child: Container(
+                    padding: EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: Colors.grey[200],
+                      shape: BoxShape.circle,
+                    ),
+                    child: Icon(Icons.arrow_back, size: 24, color: Colors.grey[700]),
+                  ),
+                ),
+                SizedBox(width: 20),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Beitrag Details',
+                        style: TextStyle(
+                          fontSize: isLargeMode ? 24 : 20,
+                          fontWeight: FontWeight.bold,
+                          color: Colors.grey[800],
+                        ),
+                      ),
+                      Text(
+                        '${time.day}.${time.month}.${time.year} um ${time.hour.toString().padLeft(2, '0')}:${time.minute.toString().padLeft(2, '0')}',
+                        style: TextStyle(
+                          fontSize: isLargeMode ? 16 : 14,
+                          color: Colors.grey[600],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                // Lösch-Button
+                GestureDetector(
+                  onTap: () {
+                    showDialog(
+                      context: context,
+                      builder: (BuildContext context) {
+                        return AlertDialog(
+                          title: Text(
+                            'Eintrag löschen?',
+                            style: TextStyle(
+                              fontSize: isLargeMode ? 20 : 18,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                          content: Text(
+                            'Möchten Sie diesen Eintrag wirklich löschen? Diese Aktion kann nicht rückgängig gemacht werden.',
+                            style: TextStyle(
+                              fontSize: isLargeMode ? 16 : 14,
+                            ),
+                          ),
+                          actions: [
+                            TextButton(
+                              onPressed: () => Navigator.of(context).pop(),
+                              child: Text(
+                                'Cancel',
+                                style: TextStyle(
+                                  fontSize: isLargeMode ? 16 : 14,
+                                  color: Colors.grey[600],
+                                ),
+                              ),
+                            ),
+                            TextButton(
+                              onPressed: () {
+                                Navigator.of(context).pop();
+                                deleteMemory(selectedEntry!['id']);
+                                closeEntryDetail();
+                              },
+                              child: Text(
+                                'Delete',
+                                style: TextStyle(
+                                  fontSize: isLargeMode ? 16 : 14,
+                                  color: Colors.red[600],
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                            ),
+                          ],
+                        );
+                      },
+                    );
+                  },
+                  child: Container(
+                    padding: EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: Colors.red[50],
+                      shape: BoxShape.circle,
+                    ),
+                    child: Icon(
+                      Icons.delete_outline,
+                      color: Colors.red[600],
+                      size: isLargeMode ? 24 : 20,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          
+          // Inhalt
+          Expanded(
+            child: SingleChildScrollView(
+              padding: EdgeInsets.all(20),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  // Titel
+                  if (selectedEntry!['title'] != null && selectedEntry!['title'].toString().isNotEmpty) ...[
+                    Container(
+                      width: double.infinity,
+                      padding: EdgeInsets.all(20),
+                      decoration: BoxDecoration(
+                        color: Colors.teal[50],
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: Colors.teal[200]!, width: 1),
+                      ),
+                      child: Row(
+                        children: [
+                          Expanded(
+                            child: Text(
+                              selectedEntry!['title'],
+                              style: TextStyle(
+                                fontSize: isLargeMode ? 22 : 20,
+                                fontWeight: FontWeight.bold,
+                                color: Colors.teal[800],
+                              ),
+                            ),
+                          ),
+                          Padding(
+                            padding: EdgeInsets.only(left: 12),
+                            child: _buildAISymbol(size: isLargeMode ? 24 : 20),
+                          ),
+                        ],
+                      ),
+                    ),
+                    SizedBox(height: 20),
+                  ],
+                  
+                  // Inhalt
+                  Container(
+                    width: double.infinity,
+                    padding: EdgeInsets.all(20),
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(12),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black12,
+                          blurRadius: 8,
+                          spreadRadius: 2,
+                        ),
+                      ],
+                    ),
+                    child: Text(
+                      selectedEntry!['content'],
+                      style: TextStyle(
+                        fontSize: isLargeMode ? 18 : 16,
+                        color: Colors.grey[800],
+                        height: 1.5,
+                      ),
+                    ),
+                  ),
+                  
+                  // Media-Anhänge
+                  if (hasMedia) ...[
+                    SizedBox(height: 20),
+                    Text(
+                      'Anhänge:',
+                      style: TextStyle(
+                        fontSize: isLargeMode ? 20 : 18,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.grey[800],
+                      ),
+                    ),
+                    SizedBox(height: 12),
+                    ...(selectedEntry!['media_files'] as List).map<Widget>((media) {
+                      return Container(
+                        margin: EdgeInsets.only(bottom: 12),
+                        padding: EdgeInsets.all(16),
+                        decoration: BoxDecoration(
+                          color: Colors.white,
+                          borderRadius: BorderRadius.circular(12),
+                          boxShadow: [
+                            BoxShadow(
+                              color: Colors.black12,
+                              blurRadius: 8,
+                              spreadRadius: 2,
+                            ),
+                          ],
+                        ),
+                        child: Row(
+                          children: [
+                            Container(
+                              padding: EdgeInsets.all(12),
+                              decoration: BoxDecoration(
+                                color: _getMediaColor(media['file_type']).withOpacity(0.1),
+                                borderRadius: BorderRadius.circular(8),
+                              ),
+                              child: Icon(
+                                _getMediaIcon(media['file_type']),
+                                size: isLargeMode ? 32 : 28,
+                                color: _getMediaColor(media['file_type']),
+                              ),
+                            ),
+                            SizedBox(width: 16),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    media['filename'],
+                                    style: TextStyle(
+                                      fontSize: isLargeMode ? 16 : 14,
+                                      fontWeight: FontWeight.w600,
+                                      color: Colors.grey[800],
+                                    ),
+                                  ),
+                                  SizedBox(height: 4),
+                                  Text(
+                                    _getMediaTypeDescription(media['file_type']),
+                                    style: TextStyle(
+                                      fontSize: isLargeMode ? 14 : 12,
+                                      color: Colors.grey[600],
+                                    ),
+                                  ),
+                                  if (media['duration'] != null) ...[
+                                    SizedBox(height: 4),
+                                    Text(
+                                      'Dauer: ${_formatDuration(media['duration'])}',
+                                      style: TextStyle(
+                                        fontSize: isLargeMode ? 12 : 10,
+                                        color: Colors.grey[500],
+                                      ),
+                                    ),
+                                  ],
+                                ],
+                              ),
+                            ),
+                            Icon(
+                              Icons.download,
+                              size: isLargeMode ? 24 : 20,
+                              color: Colors.grey[400],
+                            ),
+                          ],
+                        ),
+                      );
+                    }).toList(),
+                  ],
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  String _getMediaTypeDescription(String fileType) {
+    switch (fileType.toLowerCase()) {
+      case 'image':
+        return 'Photo';
+      case 'video':
+        return 'Video';
+      case 'audio':
+        return 'Voice Message';
+      default:
+        return 'File';
+    }
   }
 
   Widget _buildMainInterfaceWithKeyboard() {
@@ -1339,12 +2243,17 @@ class _MemoryPageState extends State<MemoryPage> with TickerProviderStateMixin {
             ),
           ),
         ),
+        
         // Tastatur-Icon - rechts positioniert
         Positioned(
           right: 40,
           top: MediaQuery.of(context).size.height * 0.5 - 40,
           child: GestureDetector(
-            onTap: startKeyboardPost,
+            onTap: () {
+              setState(() {
+                showPostEditor = true;
+              });
+            },
             child: Container(
               padding: EdgeInsets.all(isLargeMode ? 16 : 12),
               decoration: BoxDecoration(
@@ -1366,6 +2275,9 @@ class _MemoryPageState extends State<MemoryPage> with TickerProviderStateMixin {
             ),
           ),
         ),
+        
+        // Untere Navigationsleiste
+        _buildBottomNavigation(),
       ],
     );
   }
@@ -1389,7 +2301,7 @@ class _MemoryPageState extends State<MemoryPage> with TickerProviderStateMixin {
           children: [
             // Foto aus Galerie
             GestureDetector(
-              onTap: () => _pickImage(ImageSource.gallery),
+              onTap: _simulatePhotoCapture,
               child: Container(
                 padding: EdgeInsets.all(isLargeMode ? 16 : 12),
                 decoration: BoxDecoration(
@@ -1400,14 +2312,14 @@ class _MemoryPageState extends State<MemoryPage> with TickerProviderStateMixin {
                   children: [
                     Icon(Icons.photo_library, size: isLargeMode ? 32 : 24, color: Colors.blue[600]),
                     SizedBox(height: 4),
-                    Text('Foto', style: TextStyle(fontSize: isLargeMode ? 14 : 12, color: Colors.blue[600])),
+                    Text('Photo', style: TextStyle(fontSize: isLargeMode ? 14 : 12, color: Colors.blue[600])),
                   ],
                 ),
               ),
             ),
             // Video aus Galerie
             GestureDetector(
-              onTap: () => _pickVideo(ImageSource.gallery),
+              onTap: _simulateVideoCapture,
               child: Container(
                 padding: EdgeInsets.all(isLargeMode ? 16 : 12),
                 decoration: BoxDecoration(
@@ -1441,7 +2353,7 @@ class _MemoryPageState extends State<MemoryPage> with TickerProviderStateMixin {
                     ),
                     SizedBox(height: 4),
                     Text(
-                      _isRecording ? 'Stopp' : 'Audio',
+                      _isRecording ? 'Stop' : 'Audio',
                       style: TextStyle(
                         fontSize: isLargeMode ? 14 : 12,
                         color: _isRecording ? Colors.red[600] : Colors.green[600],
@@ -1521,6 +2433,88 @@ class _MemoryPageState extends State<MemoryPage> with TickerProviderStateMixin {
     );
   }
 
+  Widget _buildSimulatedMediaFiles() {
+    if (_simulatedMediaFiles.isEmpty) return SizedBox.shrink();
+    
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          'Simulierte Anhänge:',
+          style: TextStyle(
+            fontSize: isLargeMode ? 16 : 14,
+            fontWeight: FontWeight.bold,
+            color: Colors.grey[700],
+          ),
+        ),
+        SizedBox(height: 8),
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: _simulatedMediaFiles.asMap().entries.map((entry) {
+            final index = entry.key;
+            final mediaFile = entry.value;
+            return Container(
+              padding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              decoration: BoxDecoration(
+                color: _getMediaColor(mediaFile['file_type']).withOpacity(0.1),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(
+                  color: _getMediaColor(mediaFile['file_type']).withOpacity(0.3),
+                  width: 1,
+                ),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(
+                    _getMediaIcon(mediaFile['file_type']),
+                    size: isLargeMode ? 20 : 16,
+                    color: _getMediaColor(mediaFile['file_type']),
+                  ),
+                  SizedBox(width: 6),
+                  Text(
+                    mediaFile['filename'],
+                    style: TextStyle(
+                      fontSize: isLargeMode ? 14 : 12,
+                      color: _getMediaColor(mediaFile['file_type']),
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                  if (mediaFile['duration'] != null) ...[
+                    SizedBox(width: 4),
+                    Text(
+                      '(${_formatDuration(mediaFile['duration'])})',
+                      style: TextStyle(
+                        fontSize: isLargeMode ? 12 : 10,
+                        color: Colors.grey[600],
+                      ),
+                    ),
+                  ],
+                  SizedBox(width: 6),
+                  GestureDetector(
+                    onTap: () => _removeSimulatedMediaFile(index),
+                    child: Icon(
+                      Icons.close,
+                      size: isLargeMode ? 18 : 14,
+                      color: Colors.red[600],
+                    ),
+                  ),
+                ],
+              ),
+            );
+          }).toList(),
+        ),
+      ],
+    );
+  }
+
+  void _removeSimulatedMediaFile(int index) {
+    setState(() {
+      _simulatedMediaFiles.removeAt(index);
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -1543,13 +2537,22 @@ class _MemoryPageState extends State<MemoryPage> with TickerProviderStateMixin {
             ),
           ),
 
+          // Fragenvorschläge zwischen Überschrift und Mikrofon (mittig)
+          if (!isHistoryView && !showPostEditor)
+            Positioned(
+              top: MediaQuery.of(context).size.height * 0.3, // 30% von oben - zwischen Titel und Mikrofon
+              left: 0,
+              right: 0,
+              child: _buildQuestionSuggestions(),
+            ),
+
           // History Icon oben links - größer (nur in normaler Ansicht)
           if (!isHistoryView)
-            Positioned(
-              top: 40,
-              left: 20,
-              child: GestureDetector(
-                onTap: toggleHistory,
+          Positioned(
+            top: 40,
+            left: 20,
+            child: GestureDetector(
+              onTap: toggleHistory,
                 child: Container(
                   padding: EdgeInsets.all(12),
                   decoration: BoxDecoration(
@@ -1563,7 +2566,56 @@ class _MemoryPageState extends State<MemoryPage> with TickerProviderStateMixin {
                       ),
                     ],
                   ),
-                  child: Icon(Icons.history, size: 40, color: Colors.teal[400]),
+                  child: Icon(Icons.calendar_month, size: 40, color: Colors.teal[400]),
+                ),
+              ),
+            ),
+
+          // Streak-Anzeige zwischen Kalender und App-Titel (nur in normaler Ansicht)
+          if (!isHistoryView)
+            Positioned(
+              top: 40,
+              left: 100, // Rechts vom Kalender-Icon
+              child: Container(
+                padding: EdgeInsets.symmetric(horizontal: isLargeMode ? 16 : 12, vertical: isLargeMode ? 8 : 6),
+                decoration: BoxDecoration(
+                  color: Colors.orange[100],
+                  borderRadius: BorderRadius.circular(20),
+                  border: Border.all(color: Colors.orange[300]!, width: 2),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.orange[200]!,
+                      blurRadius: isLargeMode ? 6 : 4,
+                      spreadRadius: isLargeMode ? 1 : 0,
+                    ),
+                  ],
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(
+                      Icons.local_fire_department,
+                      size: isLargeMode ? 20 : 18,
+                      color: Colors.orange[600],
+                    ),
+                    SizedBox(width: 6),
+                    Text(
+                      '$currentStreak',
+                      style: TextStyle(
+                        fontSize: isLargeMode ? 16 : 14,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.orange[800],
+                      ),
+                    ),
+                    SizedBox(width: 2),
+                    Text(
+                      'Days',
+                      style: TextStyle(
+                        fontSize: isLargeMode ? 12 : 10,
+                        color: Colors.orange[700],
+                      ),
+                    ),
+                  ],
                 ),
               ),
             ),
@@ -1576,8 +2628,8 @@ class _MemoryPageState extends State<MemoryPage> with TickerProviderStateMixin {
               child: GestureDetector(
                 onTap: toggleSizeMode,
                 child: Container(
-                  padding: EdgeInsets.all(12),
-                  decoration: BoxDecoration(
+                    padding: EdgeInsets.all(12),
+                    decoration: BoxDecoration(
                     color: Colors.grey[100],
                     shape: BoxShape.circle,
                     boxShadow: [
@@ -1601,9 +2653,19 @@ class _MemoryPageState extends State<MemoryPage> with TickerProviderStateMixin {
           if (isHistoryView)
             _buildHistoryView(),
 
-          // Post-Editor oder Hauptmikrofon-Button
-          if (!isHistoryView)
-            showPostEditor ? _buildPostEditor() : _buildMainInterfaceWithKeyboard(),
+          // Detail-Ansicht (kann sowohl in Historie als auch außerhalb angezeigt werden)
+          if (showDetailView)
+            _buildEntryDetailView(),
+          
+          // Tageszusammenfassung-Ansicht
+          if (showDailySummary)
+            _buildDailySummaryView(),
+          
+          // Post-Editor oder Hauptmikrofon-Button (nur außerhalb der Historie)
+          if (!isHistoryView && !showDetailView && !showDailySummary)
+            showPostEditor 
+              ? _buildPostEditor() 
+              : _buildMainInterfaceWithKeyboard(),
 
 
           // Alte Speech-to-Text Oberfläche (entfernt - wird durch Post-Editor ersetzt)
@@ -1628,15 +2690,15 @@ class _MemoryPageState extends State<MemoryPage> with TickerProviderStateMixin {
                     ],
                   ),
                   child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
+              mainAxisSize: MainAxisSize.min,
+              children: [
                       Row(
                         children: [
                           if (isListening) ...[
                             Icon(Icons.mic, color: Colors.blue[600], size: 24),
                             SizedBox(width: 10),
                             Text(
-                              'Zuhören...',
+                              'Listening...',
                               style: TextStyle(
                                 fontSize: 16,
                                 fontWeight: FontWeight.bold,
@@ -1644,14 +2706,14 @@ class _MemoryPageState extends State<MemoryPage> with TickerProviderStateMixin {
                               ),
                             ),
                             Spacer(),
-                          GestureDetector(
+                GestureDetector(
                             onTap: _stopListening,
-                            child: Container(
+                    child: Container(
                               padding: EdgeInsets.all(8),
-                              decoration: BoxDecoration(
+                      decoration: BoxDecoration(
                                 color: Colors.grey[200],
-                                shape: BoxShape.circle,
-                              ),
+                        shape: BoxShape.circle,
+                      ),
                               child: Icon(Icons.stop, color: Colors.grey[600], size: 32),
                             ),
                           ),
@@ -1659,7 +2721,7 @@ class _MemoryPageState extends State<MemoryPage> with TickerProviderStateMixin {
                             Icon(Icons.edit, color: Colors.grey[600], size: 24),
                             SizedBox(width: 10),
                             Text(
-                              'Text bearbeiten',
+                              'Edit Text',
                               style: TextStyle(
                                 fontSize: 16,
                                 fontWeight: FontWeight.bold,
@@ -1667,7 +2729,7 @@ class _MemoryPageState extends State<MemoryPage> with TickerProviderStateMixin {
                               ),
                             ),
                             Spacer(),
-                            GestureDetector(
+                GestureDetector(
                               onTap: _cancelPost,
                               child: Container(
                                 padding: EdgeInsets.all(8),
@@ -1730,7 +2792,7 @@ class _MemoryPageState extends State<MemoryPage> with TickerProviderStateMixin {
                           ElevatedButton.icon(
                             onPressed: _cancelPost,
                             icon: Icon(Icons.close, size: 28),
-                            label: Text('Abbrechen', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
+                            label: Text('Cancel', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
                             style: ElevatedButton.styleFrom(
                               backgroundColor: Colors.grey[300],
                               foregroundColor: Colors.grey[700],
@@ -1744,7 +2806,7 @@ class _MemoryPageState extends State<MemoryPage> with TickerProviderStateMixin {
                           ElevatedButton.icon(
                             onPressed: _sendPost,
                             icon: Icon(Icons.send, size: 28),
-                            label: Text('Senden', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
+                            label: Text('Send', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
                             style: ElevatedButton.styleFrom(
                               backgroundColor: Colors.teal[400],
                               foregroundColor: Colors.white,
@@ -1832,7 +2894,7 @@ class _MemoryPageState extends State<MemoryPage> with TickerProviderStateMixin {
                     SizedBox(width: 12),
                     GestureDetector(
                       onTap: () {
-                        addMemory(_controller.text);
+                        addMemory(_speechController.text);
                         _cancelPost();
                       },
                       child: Container(
@@ -1853,6 +2915,53 @@ class _MemoryPageState extends State<MemoryPage> with TickerProviderStateMixin {
               ),
             ),
         ],
+      ),
+    );
+  }
+
+  Widget _buildQuestionSuggestions() {
+    if (questions.isEmpty) {
+      return SizedBox.shrink();
+    }
+
+    // Zeige nur 1 zufällige Frage
+    final shuffledQuestions = List<Question>.from(questions)..shuffle();
+    final randomQuestion = shuffledQuestions.first;
+
+    return Container(
+      height: 100,
+      child: Center(
+        child: Container(
+          width: MediaQuery.of(context).size.width * 0.9,
+          padding: EdgeInsets.all(20),
+          child: GestureDetector(
+            onTap: () {
+              // Frage in den Post-Editor übertragen
+              _speechController.text = randomQuestion.questionText;
+              setState(() {
+                showPostEditor = true;
+              });
+            },
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                _buildAISymbol(size: isLargeMode ? 20 : 16),
+                SizedBox(width: 12),
+                Expanded(
+                  child: Text(
+                    randomQuestion.questionText,
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      fontSize: isLargeMode ? 24 : 16,
+                      color: Colors.grey[700],
+                      height: 1.3,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
       ),
     );
   }
