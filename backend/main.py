@@ -698,3 +698,31 @@ def get_likes_by_user_type(user_type: str):
         
     except Exception as e:
         return {"error": str(e)}
+
+# --- Chat Endpoint ---
+@app.post("/chat")
+def chat_with_ai(request: dict):
+    """Chat with AI based on Grandma's memories"""
+    try:
+        from groq_client import generate_chat_response
+        
+        message = request.get('message', '')
+        recent_memories = request.get('recent_memories', [])
+        
+        if not message:
+            return {"error": "No message provided"}
+        
+        # Generiere KI-Antwort basierend auf den Erinnerungen
+        response = generate_chat_response(message, recent_memories)
+        
+        return {
+            "response": response,
+            "timestamp": datetime.now().isoformat()
+        }
+        
+    except Exception as e:
+        return {"error": str(e)}
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)

@@ -83,3 +83,55 @@ Title:"""
     except Exception as e:
         print(f"Fehler bei Groq Titel-Generierung: {e}")
         return ""
+
+def generate_chat_response(message: str, recent_memories: list) -> str:
+    """
+    Generiert eine Chat-Antwort basierend auf den Erinnerungen der Oma.
+    Die KI antwortet nicht als Oma selbst, sondern beschreibt, wie Oma wahrscheinlich antworten würde.
+    """
+    try:
+        # Erstelle Kontext aus den letzten Erinnerungen
+        memories_context = ""
+        if recent_memories:
+            memories_context = "Here are Grandma's recent memories:\n"
+            for memory in recent_memories:
+                title = memory.get('title', 'Untitled')
+                content = memory.get('content', '')
+                date = memory.get('date', '')
+                memories_context += f"- {title}: {content}\n"
+        
+        # Prompt für Chat-Antwort
+        prompt = f"""You are an AI assistant helping family members understand their elderly relative's perspective based on her memories. 
+
+{memories_context}
+
+The family member asked: "{message}"
+
+Based on Grandma's memories and experiences, describe how she would likely respond to this question. Do NOT write as if you are Grandma herself. Instead, describe her perspective and likely response in third person, explaining what she would probably say or think based on her memories and experiences.
+
+Keep the response conversational, warm, and helpful. Focus on insights from her memories that would inform her response. If the question is about something not covered in her memories, explain that based on her general experiences and personality that can be inferred from her memories.
+
+Response (2-3 sentences, conversational tone):"""
+
+        # Groq API-Aufruf
+        response = client.chat.completions.create(
+            model="llama-3.1-8b-instant",
+            messages=[
+                {"role": "system", "content": "You are a helpful AI assistant that helps family members understand their elderly relative's perspective based on her memories."},
+                {"role": "user", "content": prompt}
+            ],
+            max_tokens=200,
+            temperature=0.7,
+        )
+        
+        if response.choices and len(response.choices) > 0:
+            ai_response = response.choices[0].message.content.strip()
+            print(f"Groq Chat-Antwort generiert: {ai_response[:100]}...")
+            return ai_response
+        else:
+            print("Groq Chat-Antwort fehlgeschlagen - keine Antwort erhalten")
+            return "Based on Grandma's memories, she would likely appreciate your question, but I'm having trouble accessing her specific thoughts right now. Please try asking about something related to her recent experiences."
+            
+    except Exception as e:
+        print(f"Fehler bei Groq Chat-Antwort: {e}")
+        return "I'm having trouble accessing Grandma's memories right now. Please try again later or ask about something specific from her recent experiences."

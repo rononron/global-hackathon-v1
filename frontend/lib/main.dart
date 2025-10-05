@@ -183,6 +183,8 @@ class _MemoryPageState extends State<MemoryPage> with TickerProviderStateMixin {
   bool showSeamlessScrollView = false; // Neue Variable für seamless Scroll-Ansicht
   bool showDailySummariesList = false; // Neue Variable für Tageszusammenfassungs-Liste (Oma-Seite)
   bool showChatView = false; // Neue Variable für Chat-Ansicht (Oma-Seite)
+  List<Map<String, dynamic>> chatMessages = []; // Chat-Nachrichten
+  TextEditingController _chatController = TextEditingController(); // Controller für Chat-Eingabe
   DateTime? seamlessScrollStartDay; // Tag von dem die seamless scroll view startet
   Map<String, dynamic>? selectedEntry;
   DailySummary? currentDailySummary;
@@ -377,6 +379,7 @@ class _MemoryPageState extends State<MemoryPage> with TickerProviderStateMixin {
     _pulseController2.dispose();
     _speechController.dispose();
     _titleController.dispose();
+    _chatController.dispose();
     _calendarScrollController.dispose();
     seamlessScrollController?.dispose();
     super.dispose();
@@ -852,6 +855,7 @@ class _MemoryPageState extends State<MemoryPage> with TickerProviderStateMixin {
       showSeamlessScrollView = false; // Schließe seamless Scroll-Ansicht wenn Historie geschlossen wird
       showDailySummariesList = false; // Schließe Tageszusammenfassungs-Liste wenn Historie geschlossen wird
       showChatView = false; // Schließe Chat-Ansicht wenn Historie geschlossen wird
+      chatMessages.clear(); // Leere Chat-Nachrichten
     });
     
     // Kein automatisches Scrollen - der Kalender startet standardmäßig beim heutigen Tag (unten)
@@ -1303,13 +1307,26 @@ class _MemoryPageState extends State<MemoryPage> with TickerProviderStateMixin {
                 SizedBox(width: 20),
                 // Chat-Titel
                 Expanded(
-                  child: Text(
-                    'Chat with Grandma',
-                    style: TextStyle(
-                      fontSize: isLargeMode ? 32 : 28,
-                      fontWeight: FontWeight.bold,
-                      color: Colors.pink[400],
-                    ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'AI Memory Assistant',
+                        style: TextStyle(
+                          fontSize: isLargeMode ? 32 : 28,
+                          fontWeight: FontWeight.bold,
+                          color: Colors.pink[400],
+                        ),
+                      ),
+                      Text(
+                        'Ask about Grandma\'s memories',
+                        style: TextStyle(
+                          fontSize: isLargeMode ? 14 : 12,
+                          color: Colors.grey[600],
+                          fontWeight: FontWeight.w400,
+                        ),
+                      ),
+                    ],
                   ),
                 ),
                 // Online-Status
@@ -1336,7 +1353,7 @@ class _MemoryPageState extends State<MemoryPage> with TickerProviderStateMixin {
                       ),
                       SizedBox(width: 6),
                       Text(
-                        'Online',
+                        'AI Ready',
                         style: TextStyle(
                           fontSize: isLargeMode ? 14 : 12,
                           color: Colors.green[700],
@@ -1382,7 +1399,7 @@ class _MemoryPageState extends State<MemoryPage> with TickerProviderStateMixin {
                               ),
                             ),
                             child: Icon(
-                              Icons.elderly_woman,
+                              Icons.psychology,
                               size: isLargeMode ? 24 : 20,
                               color: Colors.pink[600],
                             ),
@@ -1502,8 +1519,9 @@ class _MemoryPageState extends State<MemoryPage> with TickerProviderStateMixin {
                       ),
                     ),
                     child: TextField(
+                      controller: _chatController,
                       decoration: InputDecoration(
-                        hintText: 'Type a message...',
+                        hintText: 'Ask about Grandma\'s memories...',
                         hintStyle: TextStyle(
                           color: Colors.grey[500],
                           fontSize: isLargeMode ? 16 : 14,
@@ -1517,6 +1535,11 @@ class _MemoryPageState extends State<MemoryPage> with TickerProviderStateMixin {
                       ),
                       maxLines: null,
                       textCapitalization: TextCapitalization.sentences,
+                      onSubmitted: (text) {
+                        if (text.trim().isNotEmpty) {
+                          _sendChatMessage(text.trim());
+                        }
+                      },
                     ),
                   ),
                 ),
@@ -1525,8 +1548,10 @@ class _MemoryPageState extends State<MemoryPage> with TickerProviderStateMixin {
                 // Senden-Button
                 GestureDetector(
                   onTap: () {
-                    // TODO: Nachricht senden implementieren
-                    print('Message sent');
+                    final text = _chatController.text.trim();
+                    if (text.isNotEmpty) {
+                      _sendChatMessage(text);
+                    }
                   },
                   child: Container(
                     width: isLargeMode ? 50 : 44,
@@ -1557,40 +1582,91 @@ class _MemoryPageState extends State<MemoryPage> with TickerProviderStateMixin {
     );
   }
 
-  // Beispiel-Chat-Nachrichten für Demo
+  // Chat-Nachrichten (leer am Anfang)
   List<Map<String, dynamic>> _getChatMessages() {
-    return [
-      {
-        'text': 'Hello dear! How are you doing today?',
+    return chatMessages;
+  }
+
+  // Chat-Nachricht senden und KI-Antwort erhalten
+  Future<void> _sendChatMessage(String message) async {
+    // Benutzer-Nachricht hinzufügen
+    final userMessage = {
+      'text': message,
+      'isFromGrandma': false,
+      'time': _formatTimeForChat(DateTime.now()),
+    };
+    
+    setState(() {
+      chatMessages.add(userMessage);
+      _chatController.clear();
+    });
+
+    try {
+      // Hole die letzten 5 Posts der Oma
+      final recentMemories = memories.take(5).map((memory) => {
+        'title': memory.title,
+        'content': memory.content,
+        'date': memory.createdAt?.toIso8601String() ?? '',
+      }).toList();
+
+      // Sende an KI für Antwort
+      final response = await http.post(
+        Uri.parse('${AppConfig.apiUrl.replaceAll('/memories', '')}/chat'),
+        headers: {'Content-Type': 'application/json'},
+        body: json.encode({
+          'message': message,
+          'recent_memories': recentMemories,
+        }),
+      );
+
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        final aiResponse = data['response'] ?? 'I\'m sorry, I couldn\'t generate a response.';
+        
+        // KI-Antwort hinzufügen
+        final aiMessage = {
+          'text': aiResponse,
+          'isFromGrandma': true,
+          'time': _formatTimeForChat(DateTime.now()),
+        };
+        
+        setState(() {
+          chatMessages.add(aiMessage);
+        });
+      } else {
+        // Fallback-Antwort bei Fehler
+        final fallbackMessage = {
+          'text': 'I\'m having trouble accessing Grandma\'s memories right now. Please try again later.',
+          'isFromGrandma': true,
+          'time': _formatTimeForChat(DateTime.now()),
+        };
+        
+        setState(() {
+          chatMessages.add(fallbackMessage);
+        });
+      }
+    } catch (e) {
+      print('Error sending chat message: $e');
+      // Fallback-Antwort bei Fehler
+      final fallbackMessage = {
+        'text': 'I\'m having trouble accessing Grandma\'s memories right now. Please try again later.',
         'isFromGrandma': true,
-        'time': '10:30 AM',
-      },
-      {
-        'text': 'Hi Grandma! I\'m doing great, thank you for asking. How about you?',
-        'isFromGrandma': false,
-        'time': '10:32 AM',
-      },
-      {
-        'text': 'I\'m wonderful! I just finished writing about my garden in my memory app. The roses are blooming beautifully this year.',
-        'isFromGrandma': true,
-        'time': '10:35 AM',
-      },
-      {
-        'text': 'That sounds lovely! I\'d love to see some photos of your roses.',
-        'isFromGrandma': false,
-        'time': '10:37 AM',
-      },
-      {
-        'text': 'I\'ll take some pictures today and share them with you. The pink ones are especially beautiful this morning.',
-        'isFromGrandma': true,
-        'time': '10:40 AM',
-      },
-      {
-        'text': 'Perfect! I can\'t wait to see them. Have a wonderful day, Grandma!',
-        'isFromGrandma': false,
-        'time': '10:42 AM',
-      },
-    ];
+        'time': _formatTimeForChat(DateTime.now()),
+      };
+      
+      setState(() {
+        chatMessages.add(fallbackMessage);
+      });
+    }
+  }
+
+  // Zeit für Chat formatieren
+  String _formatTimeForChat(DateTime dateTime) {
+    final hour = dateTime.hour;
+    final minute = dateTime.minute.toString().padLeft(2, '0');
+    final period = hour >= 12 ? 'PM' : 'AM';
+    final displayHour = hour > 12 ? hour - 12 : (hour == 0 ? 12 : hour);
+    return '$displayHour:$minute $period';
   }
 
   // Blog-ähnliche Ansicht für Tageszusammenfassung
@@ -1971,6 +2047,7 @@ class _MemoryPageState extends State<MemoryPage> with TickerProviderStateMixin {
       showSeamlessScrollView = false; // Schließe seamless Scroll-Ansicht
       showDailySummariesList = false; // Schließe Tageszusammenfassungs-Liste
       showChatView = false; // Schließe Chat-Ansicht
+      chatMessages.clear(); // Leere Chat-Nachrichten
       showDetailView = false; // Schließe auch Detail-Ansicht
     });
   }
@@ -3413,6 +3490,7 @@ class _MemoryPageState extends State<MemoryPage> with TickerProviderStateMixin {
                     showSeamlessScrollView = false;
                     showDailySummariesList = false;
                     showChatView = false;
+                    chatMessages.clear(); // Leere Chat-Nachrichten
                     seamlessScrollStartDay = null;
                     hasScrolledToStartDay = false;
                   });
