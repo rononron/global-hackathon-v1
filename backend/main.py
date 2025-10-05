@@ -8,7 +8,7 @@ import os
 import json
 import uuid
 from datetime import datetime
-from groq_client import generate_smart_title
+from .groq_client import generate_smart_title
 
 # --- Konfiguration ---
 DB_PATH = "memory_keeper.db"
