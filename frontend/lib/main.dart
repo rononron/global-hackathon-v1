@@ -43,6 +43,7 @@ class Memory {
   final String title;
   final String content;
   final List<MediaFile> mediaFiles;
+  final String? lifeChapter; // Neues Feld für Lebensabschnitt
   final DateTime? createdAt;
   final DateTime? updatedAt;
 
@@ -51,6 +52,7 @@ class Memory {
     required this.title,
     required this.content,
     this.mediaFiles = const [],
+    this.lifeChapter,
     this.createdAt,
     this.updatedAt,
   });
@@ -60,6 +62,7 @@ class Memory {
     'title': title,
     'content': content,
     'media_files': mediaFiles.map((f) => f.toJson()).toList(),
+    'life_chapter': lifeChapter,
     'created_at': createdAt?.toIso8601String(),
     'updated_at': updatedAt?.toIso8601String(),
   };
@@ -71,6 +74,7 @@ class Memory {
     mediaFiles: (json['media_files'] as List?)
         ?.map((f) => MediaFile.fromJson(f))
         .toList() ?? [],
+    lifeChapter: json['life_chapter'],
     createdAt: json['created_at'] != null 
         ? DateTime.parse(json['created_at']) 
         : null,
@@ -176,14 +180,151 @@ class _MemoryPageState extends State<MemoryPage> with TickerProviderStateMixin {
   bool showHistory = false;
   bool showDetailView = false;
   bool showDailySummary = false;
+  bool showSeamlessScrollView = false; // Neue Variable für seamless Scroll-Ansicht
+  bool showDailySummariesList = false; // Neue Variable für Tageszusammenfassungs-Liste (Oma-Seite)
+  bool showChatView = false; // Neue Variable für Chat-Ansicht (Oma-Seite)
+  DateTime? seamlessScrollStartDay; // Tag von dem die seamless scroll view startet
   Map<String, dynamic>? selectedEntry;
   DailySummary? currentDailySummary;
   int currentStreak = 0;
   late bool isLargeMode = true; // Standard: vergrößerter Modus
+  bool hasSelectedUserType = false; // Neue Variable für Einstiegspunkt
+  bool isFamilyView = false; // Neue Variable für Familienmitglieder-Ansicht
+  Set<int> viewedMemoryIds = {}; // IDs der bereits gesehenen Memories
+  bool hasVisitedFamilyView = false; // Track ob Familienmitglieder-Seite schon besucht wurde
+  bool isOmaView = false; // Neue Variable für Oma-Ansicht
+  bool isLifeChaptersView = false; // Neue Variable für Kapitel des Lebens
+  bool isFamilyMembersView = false; // Neue Variable für Angehörige der Eingabenden Person
+  String? previousView; // Verfolgt die vorherige Ansicht für Navigation
+  Set<int> likedMemories = {}; // IDs der gelikten Memories
+  Map<int, int> memoryLikeCounts = {}; // Memory ID -> Like Count
+  bool hasLoadedLikesForOma = false; // Track ob Likes für Oma-Ansicht geladen wurden
+  ScrollController? seamlessScrollController; // Controller für seamless scroll view
+  bool hasScrolledToStartDay = false; // Track ob bereits zum Start-Tag gescrollt wurde
   late AnimationController _pulseController;
   late AnimationController _pulseController2;
   String _recognizedText = '';
   bool _isAvailable = true; // Simuliert verfügbare Spracherkennung
+  
+  // Angehörige für die Eingabende Person
+  final List<Map<String, dynamic>> familyMembers = [
+    {
+      'id': 'son1',
+      'name': 'Michael',
+      'relation': 'Son',
+      'icon': Icons.man,
+      'color': Colors.blue,
+      'hasNewContent': true,
+    },
+    {
+      'id': 'son2',
+      'name': 'Thomas',
+      'relation': 'Son',
+      'icon': Icons.man,
+      'color': Colors.blue,
+      'hasNewContent': false,
+    },
+    {
+      'id': 'daughter',
+      'name': 'Sarah',
+      'relation': 'Daughter',
+      'icon': Icons.woman,
+      'color': Colors.pink,
+      'hasNewContent': true,
+    },
+    {
+      'id': 'grandson1',
+      'name': 'Lukas',
+      'relation': 'Grandson',
+      'icon': Icons.child_care,
+      'color': Colors.green,
+      'hasNewContent': false,
+    },
+    {
+      'id': 'grandson2',
+      'name': 'Max',
+      'relation': 'Grandson',
+      'icon': Icons.child_care,
+      'color': Colors.green,
+      'hasNewContent': true,
+    },
+    {
+      'id': 'granddaughter1',
+      'name': 'Emma',
+      'relation': 'Granddaughter',
+      'icon': Icons.child_care,
+      'color': Colors.purple,
+      'hasNewContent': false,
+    },
+    {
+      'id': 'granddaughter2',
+      'name': 'Sophie',
+      'relation': 'Granddaughter',
+      'icon': Icons.child_care,
+      'color': Colors.purple,
+      'hasNewContent': true,
+    },
+  ];
+
+  // Lebensabschnitte für "Kapitel des Lebens"
+  final List<Map<String, dynamic>> lifeChapters = [
+    {
+      'id': 'childhood',
+      'title': 'Childhood',
+      'subtitle': 'Early memories',
+      'icon': Icons.child_care,
+      'color': Colors.orange,
+      'completed': true,
+    },
+    {
+      'id': 'school',
+      'title': 'School Years',
+      'subtitle': 'Learning & growing',
+      'icon': Icons.school,
+      'color': Colors.blue,
+      'completed': true,
+    },
+    {
+      'id': 'youth',
+      'title': 'Youth',
+      'subtitle': 'Adventures & dreams',
+      'icon': Icons.emoji_people,
+      'color': Colors.green,
+      'completed': true,
+    },
+    {
+      'id': 'career',
+      'title': 'Career',
+      'subtitle': 'Work & achievements',
+      'icon': Icons.work,
+      'color': Colors.purple,
+      'completed': false,
+    },
+    {
+      'id': 'family',
+      'title': 'Family Life',
+      'subtitle': 'Love & children',
+      'icon': Icons.family_restroom,
+      'color': Colors.pink,
+      'completed': false,
+    },
+    {
+      'id': 'travels',
+      'title': 'Travels',
+      'subtitle': 'Places & experiences',
+      'icon': Icons.flight,
+      'color': Colors.teal,
+      'completed': false,
+    },
+    {
+      'id': 'wisdom',
+      'title': 'Wisdom',
+      'subtitle': 'Life lessons',
+      'icon': Icons.lightbulb,
+      'color': Colors.amber,
+      'completed': false,
+    },
+  ];
   
   // History View States
   late bool isHistoryView = false;
@@ -205,8 +346,13 @@ class _MemoryPageState extends State<MemoryPage> with TickerProviderStateMixin {
   @override
   void initState() {
     super.initState();
+    // Wake-up ping to backend for demo purposes
+    _wakeUpBackend();
     fetchMemories();
     fetchQuestions();
+    _loadLikes();
+    _loadLikeCounts();
+    seamlessScrollController = ScrollController();
     _pulseController = AnimationController(
       duration: Duration(milliseconds: 1000),
       vsync: this,
@@ -232,7 +378,24 @@ class _MemoryPageState extends State<MemoryPage> with TickerProviderStateMixin {
     _speechController.dispose();
     _titleController.dispose();
     _calendarScrollController.dispose();
+    seamlessScrollController?.dispose();
     super.dispose();
+  }
+
+  // Wake-up ping to backend for demo purposes
+  Future<void> _wakeUpBackend() async {
+    try {
+      // Send a simple ping to wake up the backend server
+      final response = await http.get(
+        Uri.parse('$apiUrl/wake-up'),
+        headers: {'Content-Type': 'application/json'},
+      ).timeout(Duration(seconds: 5));
+      
+      print('Backend wake-up ping sent (status: ${response.statusCode})');
+    } catch (e) {
+      // Silently ignore errors - this is just a wake-up ping
+      print('Backend wake-up ping failed (this is normal): $e');
+    }
   }
 
   Future<void> fetchMemories() async {
@@ -247,6 +410,9 @@ class _MemoryPageState extends State<MemoryPage> with TickerProviderStateMixin {
           // Berechne aktuelle Streak
           currentStreak = calculateStreak();
         });
+        
+        // Lade Like-Counts für alle Memories
+        _loadLikeCounts();
       }
     } catch (e) {
       print('Error fetching memories: $e');
@@ -296,11 +462,15 @@ class _MemoryPageState extends State<MemoryPage> with TickerProviderStateMixin {
         setState(() {
           currentDailySummary = DailySummary.fromJson(data);
           showDailySummary = true;
+          // Schließe andere Ansichten um Tageszusammenfassung anzuzeigen
+          showDetailView = false;
         });
       } else {
         setState(() {
           currentDailySummary = null;
           showDailySummary = true;
+          // Schließe andere Ansichten um Tageszusammenfassung anzuzeigen
+          showDetailView = false;
         });
       }
     } catch (e) {
@@ -308,7 +478,25 @@ class _MemoryPageState extends State<MemoryPage> with TickerProviderStateMixin {
       setState(() {
         currentDailySummary = null;
         showDailySummary = true;
+        // Schließe andere Ansichten um Tageszusammenfassung anzuzeigen
+        showDetailView = false;
       });
+    }
+  }
+
+  // Alle Tageszusammenfassungen abrufen
+  Future<List<DailySummary>> _fetchAllDailySummaries() async {
+    try {
+      final response = await http.get(Uri.parse('${AppConfig.apiUrl.replaceAll('/memories', '')}/daily-summaries'));
+      if (response.statusCode == 200) {
+        final List<dynamic> data = json.decode(response.body);
+        return data.map((json) => DailySummary.fromJson(json)).toList();
+      } else {
+        return [];
+      }
+    } catch (e) {
+      print('Error fetching all daily summaries: $e');
+      return [];
     }
   }
 
@@ -350,7 +538,7 @@ class _MemoryPageState extends State<MemoryPage> with TickerProviderStateMixin {
     }).toList();
   }
 
-  Future<void> addMemory(String content, {String? title, List<MediaFile>? mediaFiles}) async {
+  Future<void> addMemory(String content, {String? title, List<MediaFile>? mediaFiles, String? lifeChapter}) async {
     if (content.trim().isEmpty) return;
     
     // Konvertiere simulierte Anhänge zu MediaFile-Objekten
@@ -368,6 +556,7 @@ class _MemoryPageState extends State<MemoryPage> with TickerProviderStateMixin {
       title: title ?? "",  // Erstmal leer - wird von KI generiert
       content: content,
       mediaFiles: mediaFiles ?? convertedMediaFiles,
+      lifeChapter: lifeChapter,
     );
     
     try {
@@ -596,7 +785,7 @@ class _MemoryPageState extends State<MemoryPage> with TickerProviderStateMixin {
 
   void _simulateListening() async {
     // Simuliert Spracherkennung für Demo-Zwecke - wortweise
-    final demoText = "Das ist ein simulierter Text für die Demo.";
+    final demoText = "Did you know I went to Italy in 1964?";
     final words = demoText.split(' ');
     
     for (int i = 0; i < words.length; i++) {
@@ -656,8 +845,13 @@ class _MemoryPageState extends State<MemoryPage> with TickerProviderStateMixin {
     setState(() {
       isHistoryView = !isHistoryView;
       selectedDay = null; // Reset selected day when entering/exiting history
+      seamlessScrollStartDay = null; // Reset Start-Tag
+      hasScrolledToStartDay = false; // Reset Scroll-Flag
       showDetailView = false; // Schließe Detail-Ansicht wenn Historie geschlossen wird
       showDailySummary = false; // Schließe Tageszusammenfassung wenn Historie geschlossen wird
+      showSeamlessScrollView = false; // Schließe seamless Scroll-Ansicht wenn Historie geschlossen wird
+      showDailySummariesList = false; // Schließe Tageszusammenfassungs-Liste wenn Historie geschlossen wird
+      showChatView = false; // Schließe Chat-Ansicht wenn Historie geschlossen wird
     });
     
     // Kein automatisches Scrollen - der Kalender startet standardmäßig beim heutigen Tag (unten)
@@ -676,6 +870,7 @@ class _MemoryPageState extends State<MemoryPage> with TickerProviderStateMixin {
     setState(() {
       showDetailView = false;
       selectedEntry = null;
+      // Bleibe in der aktuellen Ansicht (seamless scroll oder kalender)
     });
   }
 
@@ -683,6 +878,12 @@ class _MemoryPageState extends State<MemoryPage> with TickerProviderStateMixin {
     setState(() {
       showDailySummary = false;
       currentDailySummary = null;
+      // Kehre zur seamless scroll view zurück (falls aktiv)
+      if (showSeamlessScrollView) {
+        // Bleibe in seamless scroll view
+      } else {
+        // Kehre zur Kalender-Ansicht zurück
+      }
     });
   }
 
@@ -707,8 +908,12 @@ class _MemoryPageState extends State<MemoryPage> with TickerProviderStateMixin {
           // Links: Kapitel des Lebens
           GestureDetector(
             onTap: () {
-              // TODO: Kapitel des Lebens Seite implementieren
-              print('Kapitel des Lebens - Coming Soon');
+              setState(() {
+                previousView = 'main'; // Remember we came from main page
+                isLifeChaptersView = true;
+                isFamilyView = false; // Exit family view when going to life chapters
+                isOmaView = false; // Exit Oma view when going to life chapters
+              });
             },
             child: Container(
               padding: EdgeInsets.all(isLargeMode ? 20 : 16),
@@ -763,11 +968,15 @@ class _MemoryPageState extends State<MemoryPage> with TickerProviderStateMixin {
             ),
           ),
           
-          // Rechts: Familienmitglieder
+          // Rechts: Familienmitglieder (Angehörige der Eingabenden Person)
           GestureDetector(
             onTap: () {
-              // TODO: Familienmitglieder Seite implementieren
-              print('Familienmitglieder - Coming Soon');
+              setState(() {
+                isFamilyMembersView = true;
+                isFamilyView = false;
+                isOmaView = false;
+                isLifeChaptersView = false;
+              });
             },
             child: Container(
               padding: EdgeInsets.all(isLargeMode ? 20 : 16),
@@ -837,15 +1046,579 @@ class _MemoryPageState extends State<MemoryPage> with TickerProviderStateMixin {
     return streak;
   }
 
+  // Seamless scrollbare Liste der Tageszusammenfassungen (für Oma-Seite)
+  Widget _buildDailySummariesListView() {
+    return Container(
+      color: Colors.grey[50],
+      child: Column(
+        children: [
+          // Header mit Navigation
+          Container(
+            padding: EdgeInsets.only(top: 40, left: 20, right: 20, bottom: 20),
+            child: Row(
+              children: [
+                // Zurück-Button
+                GestureDetector(
+                  onTap: () {
+                    setState(() {
+                      showDailySummariesList = false;
+                      isOmaView = true;
+                    });
+                  },
+                  child: Container(
+                    padding: EdgeInsets.all(isLargeMode ? 16 : 12),
+                    decoration: BoxDecoration(
+                      color: Colors.grey[100],
+                      shape: BoxShape.circle,
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black12,
+                          blurRadius: isLargeMode ? 12 : 8,
+                          spreadRadius: isLargeMode ? 3 : 2,
+                        ),
+                      ],
+                    ),
+                    child: Icon(
+                      Icons.arrow_back,
+                      size: isLargeMode ? 40 : 32,
+                      color: Colors.grey[600],
+                    ),
+                  ),
+                ),
+                SizedBox(width: 20),
+                // Titel
+                Expanded(
+                  child: Text(
+                    'Daily Summaries',
+                    style: TextStyle(
+                      fontSize: isLargeMode ? 32 : 28,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.teal[400],
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          
+          // Liste der Tageszusammenfassungen
+          Expanded(
+            child: FutureBuilder<List<DailySummary>>(
+              future: _fetchAllDailySummaries(),
+              builder: (context, snapshot) {
+                if (snapshot.connectionState == ConnectionState.waiting) {
+                  return Center(
+                    child: CircularProgressIndicator(
+                      color: Colors.teal[400],
+                    ),
+                  );
+                }
+                
+                if (snapshot.hasError || !snapshot.hasData || snapshot.data!.isEmpty) {
+                  return Center(
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Icon(
+                          Icons.auto_stories,
+                          size: isLargeMode ? 80 : 64,
+                          color: Colors.grey[400],
+                        ),
+                        SizedBox(height: 20),
+                        Text(
+                          'No daily summaries yet',
+                          style: TextStyle(
+                            fontSize: isLargeMode ? 24 : 20,
+                            color: Colors.grey[600],
+                            fontWeight: FontWeight.w500,
+                          ),
+                        ),
+                        SizedBox(height: 10),
+                        Text(
+                          'Summaries will appear here',
+                          style: TextStyle(
+                            fontSize: isLargeMode ? 18 : 16,
+                            color: Colors.grey[500],
+                          ),
+                        ),
+                      ],
+                    ),
+                  );
+                }
+                
+                final summaries = snapshot.data!;
+                return ListView.builder(
+                  padding: EdgeInsets.symmetric(horizontal: 20),
+                  itemCount: summaries.length,
+                  itemBuilder: (context, index) {
+                    final summary = summaries[index];
+                    final date = DateTime.parse(summary.date);
+                    
+                    return GestureDetector(
+                      onTap: () {
+                        setState(() {
+                          currentDailySummary = summary;
+                          showDailySummary = true;
+                          showDailySummariesList = false;
+                        });
+                      },
+                      child: Container(
+                        margin: EdgeInsets.only(bottom: 16),
+                        padding: EdgeInsets.all(isLargeMode ? 20 : 16),
+                        decoration: BoxDecoration(
+                          color: Colors.white,
+                          borderRadius: BorderRadius.circular(16),
+                          boxShadow: [
+                            BoxShadow(
+                              color: Colors.black.withOpacity(0.05),
+                              blurRadius: 10,
+                              spreadRadius: 2,
+                            ),
+                          ],
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            // Datum und AI-Symbol
+                            Row(
+                              children: [
+                                Icon(
+                                  Icons.calendar_today,
+                                  size: isLargeMode ? 18 : 16,
+                                  color: Colors.teal[600],
+                                ),
+                                SizedBox(width: 8),
+                                Text(
+                                  _formatDateForDisplay(date),
+                                  style: TextStyle(
+                                    fontSize: isLargeMode ? 18 : 16,
+                                    fontWeight: FontWeight.bold,
+                                    color: Colors.teal[700],
+                                  ),
+                                ),
+                                Spacer(),
+                                // AI-Symbol
+                                Icon(
+                                  Icons.psychology,
+                                  size: isLargeMode ? 18 : 16,
+                                  color: Colors.grey[500],
+                                ),
+                              ],
+                            ),
+                            SizedBox(height: 12),
+                            // Zusammenfassung Preview
+                            Text(
+                              summary.summary.length > 150 
+                                  ? '${summary.summary.substring(0, 150)}...'
+                                  : summary.summary,
+                              style: TextStyle(
+                                fontSize: isLargeMode ? 16 : 14,
+                                color: Colors.grey[600],
+                                height: 1.4,
+                              ),
+                            ),
+                            SizedBox(height: 12),
+                            // "Read more" Hinweis
+                            Row(
+                              children: [
+                                Icon(
+                                  Icons.arrow_forward_ios,
+                                  size: isLargeMode ? 14 : 12,
+                                  color: Colors.teal[400],
+                                ),
+                                SizedBox(width: 4),
+                                Text(
+                                  'Tap to read full summary',
+                                  style: TextStyle(
+                                    fontSize: isLargeMode ? 14 : 12,
+                                    color: Colors.teal[400],
+                                    fontWeight: FontWeight.w500,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ],
+                        ),
+                      ),
+                    );
+                  },
+                );
+              },
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // Chat-Ansicht für Angehörige (ChatGPT/WhatsApp-ähnlich)
+  Widget _buildChatView() {
+    return Container(
+      color: Colors.grey[50],
+      child: Column(
+        children: [
+          // Header mit Navigation
+          Container(
+            padding: EdgeInsets.only(top: 40, left: 20, right: 20, bottom: 20),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withOpacity(0.1),
+                  blurRadius: 4,
+                  spreadRadius: 1,
+                ),
+              ],
+            ),
+            child: Row(
+              children: [
+                // Zurück-Button
+                GestureDetector(
+                  onTap: () {
+                    setState(() {
+                      showChatView = false;
+                      isOmaView = true;
+                    });
+                  },
+                  child: Container(
+                    padding: EdgeInsets.all(isLargeMode ? 16 : 12),
+                    decoration: BoxDecoration(
+                      color: Colors.grey[100],
+                      shape: BoxShape.circle,
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black12,
+                          blurRadius: isLargeMode ? 12 : 8,
+                          spreadRadius: isLargeMode ? 3 : 2,
+                        ),
+                      ],
+                    ),
+                    child: Icon(
+                      Icons.arrow_back,
+                      size: isLargeMode ? 40 : 32,
+                      color: Colors.grey[600],
+                    ),
+                  ),
+                ),
+                SizedBox(width: 20),
+                // Chat-Titel
+                Expanded(
+                  child: Text(
+                    'Chat with Grandma',
+                    style: TextStyle(
+                      fontSize: isLargeMode ? 32 : 28,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.pink[400],
+                    ),
+                  ),
+                ),
+                // Online-Status
+                Container(
+                  padding: EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                  decoration: BoxDecoration(
+                    color: Colors.green[100],
+                    borderRadius: BorderRadius.circular(20),
+                    border: Border.all(
+                      color: Colors.green[300]!,
+                      width: 1,
+                    ),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Container(
+                        width: 8,
+                        height: 8,
+                        decoration: BoxDecoration(
+                          color: Colors.green[500],
+                          shape: BoxShape.circle,
+                        ),
+                      ),
+                      SizedBox(width: 6),
+                      Text(
+                        'Online',
+                        style: TextStyle(
+                          fontSize: isLargeMode ? 14 : 12,
+                          color: Colors.green[700],
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+          
+          // Chat-Nachrichten-Bereich
+          Expanded(
+            child: Container(
+              padding: EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+              child: ListView.builder(
+                itemCount: _getChatMessages().length,
+                itemBuilder: (context, index) {
+                  final message = _getChatMessages()[index];
+                  final isFromGrandma = message['isFromGrandma'];
+                  
+                  return Container(
+                    margin: EdgeInsets.only(bottom: 16),
+                    child: Row(
+                      mainAxisAlignment: isFromGrandma 
+                          ? MainAxisAlignment.start 
+                          : MainAxisAlignment.end,
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        if (isFromGrandma) ...[
+                          // Avatar für Oma
+                          Container(
+                            width: isLargeMode ? 40 : 32,
+                            height: isLargeMode ? 40 : 32,
+                            decoration: BoxDecoration(
+                              color: Colors.pink[100],
+                              shape: BoxShape.circle,
+                              border: Border.all(
+                                color: Colors.pink[200]!,
+                                width: 2,
+                              ),
+                            ),
+                            child: Icon(
+                              Icons.elderly_woman,
+                              size: isLargeMode ? 24 : 20,
+                              color: Colors.pink[600],
+                            ),
+                          ),
+                          SizedBox(width: 12),
+                        ],
+                        
+                        // Nachrichten-Bubble
+                        Flexible(
+                          child: Container(
+                            constraints: BoxConstraints(
+                              maxWidth: MediaQuery.of(context).size.width * 0.7,
+                            ),
+                            padding: EdgeInsets.all(isLargeMode ? 16 : 12),
+                            decoration: BoxDecoration(
+                              color: isFromGrandma 
+                                  ? Colors.white 
+                                  : Colors.pink[400],
+                              borderRadius: BorderRadius.circular(20).copyWith(
+                                bottomLeft: isFromGrandma 
+                                    ? Radius.circular(4) 
+                                    : Radius.circular(20),
+                                bottomRight: isFromGrandma 
+                                    ? Radius.circular(20) 
+                                    : Radius.circular(4),
+                              ),
+                              boxShadow: [
+                                BoxShadow(
+                                  color: Colors.black.withOpacity(0.1),
+                                  blurRadius: 8,
+                                  spreadRadius: 1,
+                                ),
+                              ],
+                            ),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  message['text'],
+                                  style: TextStyle(
+                                    fontSize: isLargeMode ? 16 : 14,
+                                    color: isFromGrandma 
+                                        ? Colors.grey[800] 
+                                        : Colors.white,
+                                    height: 1.4,
+                                  ),
+                                ),
+                                SizedBox(height: 4),
+                                Text(
+                                  message['time'],
+                                  style: TextStyle(
+                                    fontSize: isLargeMode ? 12 : 10,
+                                    color: isFromGrandma 
+                                        ? Colors.grey[500] 
+                                        : Colors.white.withOpacity(0.8),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                        
+                        if (!isFromGrandma) ...[
+                          SizedBox(width: 12),
+                          // Avatar für Angehörigen
+                          Container(
+                            width: isLargeMode ? 40 : 32,
+                            height: isLargeMode ? 40 : 32,
+                            decoration: BoxDecoration(
+                              color: Colors.blue[100],
+                              shape: BoxShape.circle,
+                              border: Border.all(
+                                color: Colors.blue[200]!,
+                                width: 2,
+                              ),
+                            ),
+                            child: Icon(
+                              Icons.person,
+                              size: isLargeMode ? 24 : 20,
+                              color: Colors.blue[600],
+                            ),
+                          ),
+                        ],
+                      ],
+                    ),
+                  );
+                },
+              ),
+            ),
+          ),
+          
+          // Text-Eingabe-Bereich
+          Container(
+            padding: EdgeInsets.all(20),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withOpacity(0.1),
+                  blurRadius: 8,
+                  spreadRadius: 1,
+                ),
+              ],
+            ),
+            child: Row(
+              children: [
+                // Text-Eingabe-Feld
+                Expanded(
+                  child: Container(
+                    padding: EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                    decoration: BoxDecoration(
+                      color: Colors.grey[100],
+                      borderRadius: BorderRadius.circular(25),
+                      border: Border.all(
+                        color: Colors.grey[300]!,
+                        width: 1,
+                      ),
+                    ),
+                    child: TextField(
+                      decoration: InputDecoration(
+                        hintText: 'Type a message...',
+                        hintStyle: TextStyle(
+                          color: Colors.grey[500],
+                          fontSize: isLargeMode ? 16 : 14,
+                        ),
+                        border: InputBorder.none,
+                        contentPadding: EdgeInsets.zero,
+                      ),
+                      style: TextStyle(
+                        fontSize: isLargeMode ? 16 : 14,
+                        color: Colors.grey[800],
+                      ),
+                      maxLines: null,
+                      textCapitalization: TextCapitalization.sentences,
+                    ),
+                  ),
+                ),
+                SizedBox(width: 12),
+                
+                // Senden-Button
+                GestureDetector(
+                  onTap: () {
+                    // TODO: Nachricht senden implementieren
+                    print('Message sent');
+                  },
+                  child: Container(
+                    width: isLargeMode ? 50 : 44,
+                    height: isLargeMode ? 50 : 44,
+                    decoration: BoxDecoration(
+                      color: Colors.pink[400],
+                      shape: BoxShape.circle,
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.pink[200]!,
+                          blurRadius: 8,
+                          spreadRadius: 2,
+                        ),
+                      ],
+                    ),
+                    child: Icon(
+                      Icons.send,
+                      size: isLargeMode ? 24 : 20,
+                      color: Colors.white,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // Beispiel-Chat-Nachrichten für Demo
+  List<Map<String, dynamic>> _getChatMessages() {
+    return [
+      {
+        'text': 'Hello dear! How are you doing today?',
+        'isFromGrandma': true,
+        'time': '10:30 AM',
+      },
+      {
+        'text': 'Hi Grandma! I\'m doing great, thank you for asking. How about you?',
+        'isFromGrandma': false,
+        'time': '10:32 AM',
+      },
+      {
+        'text': 'I\'m wonderful! I just finished writing about my garden in my memory app. The roses are blooming beautifully this year.',
+        'isFromGrandma': true,
+        'time': '10:35 AM',
+      },
+      {
+        'text': 'That sounds lovely! I\'d love to see some photos of your roses.',
+        'isFromGrandma': false,
+        'time': '10:37 AM',
+      },
+      {
+        'text': 'I\'ll take some pictures today and share them with you. The pink ones are especially beautiful this morning.',
+        'isFromGrandma': true,
+        'time': '10:40 AM',
+      },
+      {
+        'text': 'Perfect! I can\'t wait to see them. Have a wonderful day, Grandma!',
+        'isFromGrandma': false,
+        'time': '10:42 AM',
+      },
+    ];
+  }
+
   // Blog-ähnliche Ansicht für Tageszusammenfassung
   Widget _buildDailySummaryView() {
-    if (!showDailySummary) return SizedBox.shrink();
+    // Prüfe ob currentDailySummary vorhanden ist
+    if (currentDailySummary == null) {
+      return Container(
+        color: Colors.grey[50],
+        child: Center(
+          child: Text(
+            'No daily summary available',
+            style: TextStyle(
+              fontSize: isLargeMode ? 24 : 20,
+              color: Colors.grey[600],
+            ),
+          ),
+        ),
+      );
+    }
     
     final dayNames = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
     final monthNames = [
       'January', 'February', 'March', 'April', 'May', 'June',
       'July', 'August', 'September', 'October', 'November', 'December'
     ];
+    
+    // Verwende das Datum aus der currentDailySummary
+    final summaryDate = DateTime.parse(currentDailySummary!.date);
     
     return Container(
       color: Colors.grey[50],
@@ -907,7 +1680,7 @@ class _MemoryPageState extends State<MemoryPage> with TickerProviderStateMixin {
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Text(
-                            '${selectedDay!.day}. ${monthNames[selectedDay!.month - 1]} ${selectedDay!.year}',
+                            '${summaryDate.day}. ${monthNames[summaryDate.month - 1]} ${summaryDate.year}',
                             style: TextStyle(
                               fontSize: isLargeMode ? 28 : 24,
                               fontWeight: FontWeight.bold,
@@ -916,7 +1689,7 @@ class _MemoryPageState extends State<MemoryPage> with TickerProviderStateMixin {
                           ),
                           SizedBox(height: 8),
                           Text(
-                            dayNames[selectedDay!.weekday - 1],
+                            dayNames[summaryDate.weekday - 1],
                             style: TextStyle(
                               fontSize: isLargeMode ? 18 : 16,
                               color: Colors.blue[600],
@@ -1183,13 +1956,22 @@ class _MemoryPageState extends State<MemoryPage> with TickerProviderStateMixin {
   void _selectDay(DateTime day) {
     setState(() {
       selectedDay = day;
+      seamlessScrollStartDay = day; // Setze Start-Tag für seamless scroll
+      hasScrolledToStartDay = false; // Reset Scroll-Flag für neuen Tag
       showDetailView = false; // Schließe Detail-Ansicht wenn neuer Tag gewählt wird
+      showSeamlessScrollView = true; // Öffne seamless Scroll-Ansicht
     });
   }
 
   void _goBackToCalendar() {
     setState(() {
       selectedDay = null;
+      seamlessScrollStartDay = null; // Reset Start-Tag
+      hasScrolledToStartDay = false; // Reset Scroll-Flag
+      showSeamlessScrollView = false; // Schließe seamless Scroll-Ansicht
+      showDailySummariesList = false; // Schließe Tageszusammenfassungs-Liste
+      showChatView = false; // Schließe Chat-Ansicht
+      showDetailView = false; // Schließe auch Detail-Ansicht
     });
   }
 
@@ -1250,10 +2032,8 @@ class _MemoryPageState extends State<MemoryPage> with TickerProviderStateMixin {
   Widget _buildHistoryView() {
     return Stack(
       children: [
-        if (selectedDay != null)
-          _buildDayView()
-        else
-          _buildCalendarView(),
+        // Immer nur Kalender-Ansicht, keine Tagesansicht mehr
+        _buildCalendarView(),
         
         // Untere Navigationsleiste auch in der Historie
         _buildBottomNavigation(),
@@ -1557,7 +2337,7 @@ class _MemoryPageState extends State<MemoryPage> with TickerProviderStateMixin {
                                 ],
                               ),
                             ),
-                            // Media-Indikatoren
+                            // Media-Indikatoren und Likes
                             if (hasMedia) ...[
                               SizedBox(width: 8),
                               Row(
@@ -1574,6 +2354,28 @@ class _MemoryPageState extends State<MemoryPage> with TickerProviderStateMixin {
                                       fontSize: isLargeMode ? 14 : 12,
                                       fontWeight: FontWeight.bold,
                                       color: Colors.teal[600],
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ],
+                            // Like-Indikator
+                            if (entry['id'] != null && memoryLikeCounts.containsKey(entry['id']) && memoryLikeCounts[entry['id']]! > 0) ...[
+                              SizedBox(width: 8),
+                              Row(
+                                children: [
+                                  Icon(
+                                    Icons.favorite,
+                                    size: isLargeMode ? 18 : 16,
+                                    color: Colors.red[500],
+                                  ),
+                                  SizedBox(width: 4),
+                                  Text(
+                                    '${memoryLikeCounts[entry['id']]}',
+                                    style: TextStyle(
+                                      fontSize: isLargeMode ? 14 : 12,
+                                      fontWeight: FontWeight.bold,
+                                      color: Colors.red[500],
                                     ),
                                   ),
                                 ],
@@ -2102,6 +2904,38 @@ class _MemoryPageState extends State<MemoryPage> with TickerProviderStateMixin {
                     ),
                   ),
                   
+                  // Like-Indikator
+                  if (selectedEntry!['id'] != null && memoryLikeCounts.containsKey(selectedEntry!['id']) && memoryLikeCounts[selectedEntry!['id']]! > 0) ...[
+                    SizedBox(height: 20),
+                    Container(
+                      width: double.infinity,
+                      padding: EdgeInsets.all(16),
+                      decoration: BoxDecoration(
+                        color: Colors.red[50],
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: Colors.red[200]!, width: 1),
+                      ),
+                      child: Row(
+                        children: [
+                          Icon(
+                            Icons.favorite,
+                            size: isLargeMode ? 24 : 20,
+                            color: Colors.red[500],
+                          ),
+                          SizedBox(width: 12),
+                          Text(
+                            '${memoryLikeCounts[selectedEntry!['id']]} family member${memoryLikeCounts[selectedEntry!['id']] == 1 ? '' : 's'} liked this memory',
+                            style: TextStyle(
+                              fontSize: isLargeMode ? 16 : 14,
+                              color: Colors.red[700],
+                              fontWeight: FontWeight.w500,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                  
                   // Media-Anhänge
                   if (hasMedia) ...[
                     SizedBox(height: 20),
@@ -2517,9 +3351,30 @@ class _MemoryPageState extends State<MemoryPage> with TickerProviderStateMixin {
 
   @override
   Widget build(BuildContext context) {
+    print('Build called - hasSelectedUserType: $hasSelectedUserType, isFamilyView: $isFamilyView, isOmaView: $isOmaView');
     return Scaffold(
       body: Stack(
         children: [
+          // Hauptinhalt
+          if (!hasSelectedUserType)
+            _buildUserTypeSelection()
+          else if (isLifeChaptersView)
+            _buildLifeChaptersView()
+          else if (isFamilyMembersView)
+            _buildFamilyMembersView()
+          else if (isFamilyView)
+            _buildFamilyView()
+          else if (isOmaView)
+            _buildOmaView()
+          else if (showDailySummariesList)
+            _buildDailySummariesListView()
+          else if (showChatView)
+            _buildChatView()
+          else if (showDailySummary)
+            _buildDailySummaryView()
+          else if (showSeamlessScrollView)
+            _buildSeamlessScrollView()
+          else ...[
           // App Name oben mittig
           Positioned(
             top: 40,
@@ -2529,7 +3384,7 @@ class _MemoryPageState extends State<MemoryPage> with TickerProviderStateMixin {
               child: Text(
                 'Memory Keeper',
                 style: TextStyle(
-                  fontSize: 28,
+                    fontSize: isLargeMode ? 32 : 28,
                   fontWeight: FontWeight.bold,
                   color: Colors.teal[400],
                 ),
@@ -2537,140 +3392,162 @@ class _MemoryPageState extends State<MemoryPage> with TickerProviderStateMixin {
             ),
           ),
 
-          // Fragenvorschläge zwischen Überschrift und Mikrofon (mittig)
-          if (!isHistoryView && !showPostEditor)
-            Positioned(
-              top: MediaQuery.of(context).size.height * 0.3, // 30% von oben - zwischen Titel und Mikrofon
-              left: 0,
-              right: 0,
-              child: _buildQuestionSuggestions(),
-            ),
-
-          // History Icon oben links - größer (nur in normaler Ansicht)
-          if (!isHistoryView)
+            // Home Button oben links - führt zurück zur Startseite
           Positioned(
             top: 40,
             left: 20,
-            child: GestureDetector(
-              onTap: toggleHistory,
+              child: GestureDetector(
+                onTap: () {
+                  setState(() {
+                    hasSelectedUserType = false;
+                    isFamilyView = false;
+                    isOmaView = false;
+                    isLifeChaptersView = false; // Ensure life chapters view is off
+                isFamilyMembersView = false; // Ensure family members view is off
+                    isFamilyMembersView = false; // Ensure family members view is off
+                    previousView = null; // Reset previous view
+                    isHistoryView = false;
+                    showDetailView = false;
+                    showDailySummary = false;
+                    showPostEditor = false;
+                    showSeamlessScrollView = false;
+                    showDailySummariesList = false;
+                    showChatView = false;
+                    seamlessScrollStartDay = null;
+                    hasScrolledToStartDay = false;
+                  });
+                },
                 child: Container(
-                  padding: EdgeInsets.all(12),
+                  padding: EdgeInsets.all(isLargeMode ? 16 : 12),
                   decoration: BoxDecoration(
                     color: Colors.grey[100],
                     shape: BoxShape.circle,
                     boxShadow: [
                       BoxShadow(
                         color: Colors.black12,
-                        blurRadius: 8,
-                        spreadRadius: 2,
-                      ),
-                    ],
-                  ),
-                  child: Icon(Icons.calendar_month, size: 40, color: Colors.teal[400]),
-                ),
-              ),
-            ),
-
-          // Streak-Anzeige zwischen Kalender und App-Titel (nur in normaler Ansicht)
-          if (!isHistoryView)
-            Positioned(
-              top: 40,
-              left: 100, // Rechts vom Kalender-Icon
-              child: Container(
-                padding: EdgeInsets.symmetric(horizontal: isLargeMode ? 16 : 12, vertical: isLargeMode ? 8 : 6),
-                decoration: BoxDecoration(
-                  color: Colors.orange[100],
-                  borderRadius: BorderRadius.circular(20),
-                  border: Border.all(color: Colors.orange[300]!, width: 2),
-                  boxShadow: [
-                    BoxShadow(
-                      color: Colors.orange[200]!,
-                      blurRadius: isLargeMode ? 6 : 4,
-                      spreadRadius: isLargeMode ? 1 : 0,
-                    ),
-                  ],
-                ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Icon(
-                      Icons.local_fire_department,
-                      size: isLargeMode ? 20 : 18,
-                      color: Colors.orange[600],
-                    ),
-                    SizedBox(width: 6),
-                    Text(
-                      '$currentStreak',
-                      style: TextStyle(
-                        fontSize: isLargeMode ? 16 : 14,
-                        fontWeight: FontWeight.bold,
-                        color: Colors.orange[800],
-                      ),
-                    ),
-                    SizedBox(width: 2),
-                    Text(
-                      'Days',
-                      style: TextStyle(
-                        fontSize: isLargeMode ? 12 : 10,
-                        color: Colors.orange[700],
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-
-          // Größen-Toggle Icon oben rechts (nur in normaler Ansicht)
-          if (!isHistoryView)
-            Positioned(
-              top: 40,
-              right: 20,
-              child: GestureDetector(
-                onTap: toggleSizeMode,
-                child: Container(
-                    padding: EdgeInsets.all(12),
-                    decoration: BoxDecoration(
-                    color: Colors.grey[100],
-                    shape: BoxShape.circle,
-                    boxShadow: [
-                      BoxShadow(
-                        color: Colors.black12,
-                        blurRadius: 8,
-                        spreadRadius: 2,
+                        blurRadius: isLargeMode ? 12 : 8,
+                        spreadRadius: isLargeMode ? 3 : 2,
                       ),
                     ],
                   ),
                   child: Icon(
-                    isLargeMode ? Icons.zoom_out : Icons.zoom_in,
-                    size: 40,
+                    Icons.home,
+                    size: isLargeMode ? 40 : 32,
                     color: Colors.teal[400],
                   ),
                 ),
               ),
             ),
 
-          // History View - Kalender oder Tagesansicht
-          if (isHistoryView)
-            _buildHistoryView(),
+            // Fragenvorschläge zwischen Überschrift und Mikrofon (mittig)
+            if (!isHistoryView && !showPostEditor)
+              Positioned(
+                top: MediaQuery.of(context).size.height * 0.3, // 30% von oben - zwischen Titel und Mikrofon
+                left: 0,
+                right: 0,
+                child: _buildQuestionSuggestions(),
+              ),
 
-          // Detail-Ansicht (kann sowohl in Historie als auch außerhalb angezeigt werden)
-          if (showDetailView)
-            _buildEntryDetailView(),
-          
-          // Tageszusammenfassung-Ansicht
-          if (showDailySummary)
-            _buildDailySummaryView(),
-          
-          // Post-Editor oder Hauptmikrofon-Button (nur außerhalb der Historie)
-          if (!isHistoryView && !showDetailView && !showDailySummary)
-            showPostEditor 
-              ? _buildPostEditor() 
-              : _buildMainInterfaceWithKeyboard(),
+            // History Icon oben rechts - größer (nur in normaler Ansicht)
+            if (!isHistoryView)
+              Positioned(
+                top: 40,
+                right: 20,
+            child: GestureDetector(
+              onTap: toggleHistory,
+                  child: Container(
+                    padding: EdgeInsets.all(isLargeMode ? 16 : 12),
+                    decoration: BoxDecoration(
+                      color: Colors.grey[100],
+                      shape: BoxShape.circle,
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black12,
+                          blurRadius: isLargeMode ? 12 : 8,
+                          spreadRadius: isLargeMode ? 3 : 2,
+                        ),
+                      ],
+                    ),
+                    child: Icon(
+                      Icons.calendar_month, 
+                      size: isLargeMode ? 40 : 32, 
+                      color: Colors.teal[400]
+                    ),
+                  ),
+                ),
+              ),
 
-
-          // Alte Speech-to-Text Oberfläche (entfernt - wird durch Post-Editor ersetzt)
-          if (false && !isHistoryView)
+            // Streak-Anzeige zwischen Home-Button und App-Titel (nur in normaler Ansicht)
+            if (!isHistoryView)
             Positioned(
+                top: 40,
+                left: 100, // Rechts vom Home-Button
+                child: Container(
+                  height: isLargeMode ? 64 : 56, // Gleiche Höhe wie Home-Button
+                  padding: EdgeInsets.symmetric(horizontal: isLargeMode ? 16 : 12, vertical: isLargeMode ? 8 : 6),
+                  decoration: BoxDecoration(
+                    color: Colors.orange[100],
+                    borderRadius: BorderRadius.circular(isLargeMode ? 32 : 28), // Kreisförmig wie Home-Button
+                    border: Border.all(color: Colors.orange[300]!, width: 2),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.orange[200]!,
+                        blurRadius: isLargeMode ? 12 : 8,
+                        spreadRadius: isLargeMode ? 3 : 2,
+                      ),
+                    ],
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Icon(
+                        Icons.local_fire_department,
+                        size: isLargeMode ? 24 : 20,
+                        color: Colors.orange[600],
+                      ),
+                      SizedBox(width: 6),
+                      Text(
+                        '$currentStreak',
+                        style: TextStyle(
+                          fontSize: isLargeMode ? 18 : 16,
+                          fontWeight: FontWeight.bold,
+                          color: Colors.orange[800],
+                        ),
+                      ),
+                      SizedBox(width: 2),
+                      Text(
+                        'Days',
+                        style: TextStyle(
+                          fontSize: isLargeMode ? 14 : 12,
+                          color: Colors.orange[700],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+
+
+            // History View - Kalender oder Tagesansicht
+            if (isHistoryView)
+              _buildHistoryView(),
+
+            // Detail-Ansicht (kann sowohl in Historie als auch außerhalb angezeigt werden)
+            if (showDetailView)
+              _buildEntryDetailView(),
+            
+            
+            // Post-Editor oder Hauptmikrofon-Button (nur außerhalb der Historie)
+            if (!isHistoryView && !showDetailView && !showDailySummary)
+              showPostEditor 
+                ? _buildPostEditor() 
+                : _buildMainInterfaceWithKeyboard(),
+
+
+            // Alte Speech-to-Text Oberfläche (entfernt - wird durch Post-Editor ersetzt)
+            if (false && !isHistoryView)
+              Positioned(
               bottom: 100,
               left: 20,
               right: 20,
@@ -2689,7 +3566,7 @@ class _MemoryPageState extends State<MemoryPage> with TickerProviderStateMixin {
                       ),
                     ],
                   ),
-                  child: Column(
+              child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
                       Row(
@@ -2710,8 +3587,8 @@ class _MemoryPageState extends State<MemoryPage> with TickerProviderStateMixin {
                             onTap: _stopListening,
                     child: Container(
                               padding: EdgeInsets.all(8),
-                      decoration: BoxDecoration(
-                                color: Colors.grey[200],
+                    decoration: BoxDecoration(
+                      color: Colors.grey[200],
                         shape: BoxShape.circle,
                       ),
                               child: Icon(Icons.stop, color: Colors.grey[600], size: 32),
@@ -2750,7 +3627,7 @@ class _MemoryPageState extends State<MemoryPage> with TickerProviderStateMixin {
                         decoration: InputDecoration(
                           hintText: 'Titel (optional)...',
                           border: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(12),
+                      borderRadius: BorderRadius.circular(12),
                             borderSide: BorderSide(color: Colors.grey[300]!),
                           ),
                           focusedBorder: OutlineInputBorder(
@@ -2825,92 +3702,126 @@ class _MemoryPageState extends State<MemoryPage> with TickerProviderStateMixin {
               ),
             ),
 
-          // Altes Pop-up Textfeld (entfernt - wird durch Post-Editor ersetzt)
-          if (false && !isHistoryView)
-            Center(
-              child: Container(
-                width: 600,
-                padding: EdgeInsets.all(32),
-                decoration: BoxDecoration(
-                  color: Colors.grey[100],
-                  borderRadius: BorderRadius.circular(24),
-                  boxShadow: [
-                    BoxShadow(
-                      color: Colors.black26,
-                      blurRadius: 20,
-                      spreadRadius: 4,
-                    ),
-                  ],
-                ),
-                child: Row(
-                  children: [
-                    // Kleines Mikrofon-Icon links
-                    GestureDetector(
-                      onTap: () {
-                        // Text aus dem Textfeld in die Speech-Textbubble übertragen
-                        if (_controller.text.isNotEmpty) {
-                          _speechController.text = _controller.text;
-                          _recognizedText = _controller.text;
-                        }
-                        // Schließt das Textfeld und startet Speech-to-Text
-                        setState(() {
-                          showPostEditor = true;
-                          isListening = true;
-                          _pulseController.repeat();
-                          Future.delayed(Duration(milliseconds: 500), () {
-                            if (isListening) {
-                              _pulseController2.repeat();
-                            }
+            // Altes Pop-up Textfeld (entfernt - wird durch Post-Editor ersetzt)
+            if (false && !isHistoryView)
+          Center(
+                child: Container(
+                  width: 600,
+                  padding: EdgeInsets.all(32),
+                  decoration: BoxDecoration(
+                    color: Colors.grey[100],
+                    borderRadius: BorderRadius.circular(24),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black26,
+                        blurRadius: 20,
+                        spreadRadius: 4,
+                      ),
+                    ],
+                  ),
+            child: Row(
+              children: [
+                      // Kleines Mikrofon-Icon links
+                GestureDetector(
+                        onTap: () {
+                          // Text aus dem Textfeld in die Speech-Textbubble übertragen
+                          if (_controller.text.isNotEmpty) {
+                            _speechController.text = _controller.text;
+                            _recognizedText = _controller.text;
+                          }
+                          // Schließt das Textfeld und startet Speech-to-Text
+                          setState(() {
+                            showPostEditor = true;
+                            isListening = true;
+                            _pulseController.repeat();
+                            Future.delayed(Duration(milliseconds: 500), () {
+                              if (isListening) {
+                                _pulseController2.repeat();
+                              }
+                            });
+                            _simulateListening();
                           });
-                          _simulateListening();
-                        });
-                      },
-                      child: Container(
-                        padding: EdgeInsets.all(20),
-                        decoration: BoxDecoration(
-                          color: Colors.grey[300],
-                          shape: BoxShape.circle,
-                        ),
-                        child: Icon(
-                          Icons.mic,
-                          color: Colors.grey[600],
-                          size: 40,
+                    },
+                    child: Container(
+                          padding: EdgeInsets.all(20),
+                      decoration: BoxDecoration(
+                            color: Colors.grey[300],
+                        shape: BoxShape.circle,
+                      ),
+                      child: Icon(
+                        Icons.mic,
+                            color: Colors.grey[600],
+                            size: 40,
+                    ),
+                  ),
+                ),
+                SizedBox(width: 20),
+                      Expanded(
+                        child: TextField(
+                          controller: _controller,
+                          style: TextStyle(fontSize: 22),
+                          decoration: InputDecoration(
+                            hintText: 'Neue Erinnerung...',
+                            hintStyle: TextStyle(fontSize: 22, color: Colors.grey[500]),
+                            border: InputBorder.none,
+                            contentPadding: EdgeInsets.symmetric(vertical: 16),
+                          ),
                         ),
                       ),
-                    ),
-                    SizedBox(width: 20),
-                    Expanded(
-                      child: TextField(
-                        controller: _controller,
-                        style: TextStyle(fontSize: 22),
-                        decoration: InputDecoration(
-                          hintText: 'Neue Erinnerung...',
-                          hintStyle: TextStyle(fontSize: 22, color: Colors.grey[500]),
-                          border: InputBorder.none,
-                          contentPadding: EdgeInsets.symmetric(vertical: 16),
+                      SizedBox(width: 12),
+                GestureDetector(
+                        onTap: () {
+                          addMemory(_speechController.text);
+                          _cancelPost();
+                        },
+                        child: Container(
+                          padding: EdgeInsets.all(16),
+                          decoration: BoxDecoration(
+                            color: Colors.teal[400],
+                            shape: BoxShape.circle,
+                          ),
+                  child: Icon(
+                            Icons.send,
+                            color: Colors.white,
+                            size: 32,
+                          ),
                         ),
                       ),
-                    ),
-                    SizedBox(width: 12),
-                    GestureDetector(
-                      onTap: () {
-                        addMemory(_speechController.text);
-                        _cancelPost();
-                      },
-                      child: Container(
-                        padding: EdgeInsets.all(16),
-                        decoration: BoxDecoration(
-                          color: Colors.teal[400],
-                          shape: BoxShape.circle,
-                        ),
-                        child: Icon(
-                          Icons.send,
-                          color: Colors.white,
-                          size: 32,
-                        ),
+                    ],
+                  ),
+                ),
+              ),
+          ],
+          
+          // Lupe Icon - funktioniert nur auf Einstiegsscreen und Hauptseite (nicht auf anderen Seiten)
+          if (!isFamilyView && !isOmaView && !isLifeChaptersView && !isFamilyMembersView && !showSeamlessScrollView && !showChatView && !showDailySummariesList)
+            Positioned(
+              bottom: 40,
+              right: 20,
+              child: GestureDetector(
+                onTap: () {
+                  setState(() {
+                    isLargeMode = !isLargeMode;
+                  });
+                },
+                child: Container(
+                  padding: EdgeInsets.all(isLargeMode ? 20 : 16),
+                  decoration: BoxDecoration(
+                    color: Colors.grey[200],
+                    shape: BoxShape.circle,
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black12,
+                        blurRadius: isLargeMode ? 12 : 8,
+                        spreadRadius: isLargeMode ? 3 : 2,
                       ),
-                    ),
-                  ],
+                    ],
+                  ),
+                  child: Icon(
+                    isLargeMode ? Icons.zoom_out : Icons.zoom_in,
+                    size: isLargeMode ? 40 : 32,
+                    color: Colors.grey[600],
+                  ),
                 ),
               ),
             ),
@@ -2953,7 +3864,7 @@ class _MemoryPageState extends State<MemoryPage> with TickerProviderStateMixin {
                     textAlign: TextAlign.center,
                     style: TextStyle(
                       fontSize: isLargeMode ? 24 : 16,
-                      color: Colors.grey[700],
+                    color: Colors.grey[700],
                       height: 1.3,
                     ),
                   ),
@@ -2962,6 +3873,1484 @@ class _MemoryPageState extends State<MemoryPage> with TickerProviderStateMixin {
             ),
           ),
         ),
+      ),
+    );
+  }
+
+  // Apple-ähnliche Benutzertyp-Auswahl
+  Widget _buildUserTypeSelection() {
+    return Container(
+      color: Colors.grey[50],
+      child: Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            // App Name oben mittig
+            Text(
+              'Memory Keeper',
+              style: TextStyle(
+                fontSize: isLargeMode ? 40 : 32,
+                fontWeight: FontWeight.bold,
+                color: Colors.teal[400],
+                letterSpacing: 0.5,
+              ),
+            ),
+            
+            SizedBox(height: isLargeMode ? 80 : 60),
+            
+            // Untertitel
+            Text(
+              'Choose your role',
+              style: TextStyle(
+                fontSize: isLargeMode ? 24 : 18,
+                color: Colors.grey[600],
+                fontWeight: FontWeight.w400,
+              ),
+            ),
+            
+            SizedBox(height: isLargeMode ? 100 : 80),
+            
+            // Zwei Blasen zur Auswahl - deutlich größer
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+              children: [
+              // Linke Blase - Eingabende Person
+              GestureDetector(
+                onTap: () {
+                  setState(() {
+                    hasSelectedUserType = true;
+                    isFamilyView = false;
+                    isOmaView = false;
+                    isLifeChaptersView = false; // Ensure life chapters view is off
+                isFamilyMembersView = false; // Ensure family members view is off
+                    isFamilyMembersView = false; // Ensure family members view is off
+                    previousView = null; // Reset previous view
+                  });
+                    },
+                    child: Container(
+                    width: isLargeMode ? 200 : 160,
+                    height: isLargeMode ? 200 : 160,
+                      decoration: BoxDecoration(
+                        color: Colors.teal[400],
+                        shape: BoxShape.circle,
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.teal[400]!.withOpacity(0.3),
+                          blurRadius: isLargeMode ? 30 : 20,
+                          spreadRadius: isLargeMode ? 8 : 5,
+                        ),
+                      ],
+                    ),
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Icon(
+                          Icons.elderly,
+                          size: isLargeMode ? 80 : 64,
+                          color: Colors.white,
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+                
+              // Rechte Blase - Familienangehörige
+              GestureDetector(
+                onTap: () {
+                  setState(() {
+                    hasSelectedUserType = true;
+                    isFamilyView = true;
+                    hasVisitedFamilyView = true;
+                    // Markiere alle aktuellen Memories als "gesehen" nach kurzer Zeit
+                    Future.delayed(Duration(seconds: 2), () {
+                      if (mounted) {
+                        setState(() {
+                          _markAllMemoriesAsViewed();
+                        });
+                      }
+                    });
+                  });
+                },
+                  child: Container(
+                    width: isLargeMode ? 200 : 160,
+                    height: isLargeMode ? 200 : 160,
+                    decoration: BoxDecoration(
+                      color: Colors.blue[400],
+                      shape: BoxShape.circle,
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.blue[400]!.withOpacity(0.3),
+                          blurRadius: isLargeMode ? 30 : 20,
+                          spreadRadius: isLargeMode ? 8 : 5,
+                        ),
+                      ],
+                    ),
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Icon(
+                          Icons.family_restroom,
+                          size: isLargeMode ? 80 : 64,
+                          color: Colors.white,
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // Familienmitglieder-Ansicht
+  Widget _buildFamilyView() {
+    return Container(
+      color: Colors.grey[50],
+      child: Column(
+        children: [
+          // Header mit Home-Button
+          Container(
+            padding: EdgeInsets.only(top: 40, left: 20, right: 20, bottom: 20),
+            child: Row(
+              children: [
+                // Home Button
+                GestureDetector(
+                  onTap: () {
+                    setState(() {
+                      hasSelectedUserType = false;
+                      isFamilyView = false;
+                      isOmaView = false;
+                    isLifeChaptersView = false; // Ensure life chapters view is off
+                isFamilyMembersView = false; // Ensure family members view is off
+                    isFamilyMembersView = false; // Ensure family members view is off
+                    previousView = null; // Reset previous view
+                      // Markiere alle aktuellen Memories als "gesehen" beim Verlassen
+                      _markAllMemoriesAsViewed();
+                    });
+                  },
+                  child: Container(
+                    padding: EdgeInsets.all(isLargeMode ? 16 : 12),
+                    decoration: BoxDecoration(
+                      color: Colors.grey[100],
+                      shape: BoxShape.circle,
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black12,
+                          blurRadius: isLargeMode ? 12 : 8,
+                          spreadRadius: isLargeMode ? 3 : 2,
+                        ),
+                      ],
+                    ),
+                      child: Icon(
+                      Icons.home,
+                      size: isLargeMode ? 40 : 32,
+                      color: Colors.teal[400],
+                    ),
+                  ),
+                ),
+                SizedBox(width: 20),
+                // Titel
+                Expanded(
+                  child: Text(
+                    'Family Members',
+                    style: TextStyle(
+                      fontSize: isLargeMode ? 32 : 28,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.blue[400],
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          
+          // Familienmitglieder-Grid
+          Expanded(
+            child: Center(
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  // Oma
+                  InkWell(
+                    onTap: () {
+                      print('Oma button clicked!');
+                      setState(() {
+                        isFamilyView = false;
+                        isOmaView = true;
+                    isLifeChaptersView = false; // Ensure life chapters view is off
+                isFamilyMembersView = false; // Ensure family members view is off
+                    isFamilyMembersView = false; // Ensure family members view is off
+                    previousView = null; // Reset previous view
+                      });
+                      print('isFamilyView set to: $isFamilyView, isOmaView set to: $isOmaView');
+                    },
+                    borderRadius: BorderRadius.circular(isLargeMode ? 100 : 80),
+                    child: Container(
+                      width: isLargeMode ? 200 : 160,
+                      height: isLargeMode ? 200 : 160,
+                      margin: EdgeInsets.only(bottom: 40),
+                      decoration: BoxDecoration(
+                        color: Colors.pink[100],
+                        shape: BoxShape.circle,
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.pink[200]!,
+                            blurRadius: isLargeMode ? 20 : 15,
+                            spreadRadius: isLargeMode ? 5 : 3,
+                          ),
+                        ],
+                      ),
+                      child: Stack(
+                        children: [
+                          // Haupt-Icon
+                          Center(
+                            child: Icon(
+                              Icons.elderly_woman,
+                              size: isLargeMode ? 80 : 64,
+                              color: Colors.pink[600],
+                            ),
+                          ),
+                          // Benachrichtigungs-Badge (wie iPhone)
+                          Positioned(
+                            top: isLargeMode ? 20 : 16,
+                            right: isLargeMode ? 20 : 16,
+                            child: Container(
+                              width: isLargeMode ? 24 : 20,
+                              height: isLargeMode ? 24 : 20,
+                              decoration: BoxDecoration(
+                                color: Colors.red[500],
+                                shape: BoxShape.circle,
+                                border: Border.all(
+                        color: Colors.white,
+                                  width: isLargeMode ? 3 : 2,
+                                ),
+                              ),
+                              child: Center(
+                                child: Text(
+                                  '3',
+                                  style: TextStyle(
+                                    color: Colors.white,
+                                    fontSize: isLargeMode ? 12 : 10,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                  
+                  // Opa
+                  GestureDetector(
+                    onTap: () {
+                      // TODO: Opa-Seite implementieren
+                      print('Opa - Coming Soon');
+                    },
+                    child: Container(
+                      width: isLargeMode ? 200 : 160,
+                      height: isLargeMode ? 200 : 160,
+                      decoration: BoxDecoration(
+                        color: Colors.blue[100],
+                        shape: BoxShape.circle,
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.blue[200]!,
+                            blurRadius: isLargeMode ? 20 : 15,
+                            spreadRadius: isLargeMode ? 5 : 3,
+                          ),
+                        ],
+                      ),
+                      child: Center(
+                        child: Icon(
+                          Icons.elderly,
+                          size: isLargeMode ? 80 : 64,
+                          color: Colors.blue[600],
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // Hilfsfunktionen für Datum/Zeit-Formatierung
+  String _formatDateForFamily(DateTime? createdAt) {
+    if (createdAt == null) return 'Recent';
+    
+    final now = DateTime.now();
+    final difference = now.difference(createdAt);
+    
+    if (difference.inDays == 0) {
+      return 'Today';
+    } else if (difference.inDays == 1) {
+      return 'Yesterday';
+    } else if (difference.inDays < 7) {
+      return '${difference.inDays}d ago';
+    } else {
+      return '${createdAt.day}/${createdAt.month}';
+    }
+  }
+
+  String _formatTimeForFamily(DateTime? createdAt) {
+    if (createdAt == null) return '';
+    return '${createdAt.hour.toString().padLeft(2, '0')}:${createdAt.minute.toString().padLeft(2, '0')}';
+  }
+
+  // Markiert alle aktuellen Memories als "gesehen"
+  void _markAllMemoriesAsViewed() {
+    for (final memory in memories) {
+      if (memory.id != null) {
+        viewedMemoryIds.add(memory.id!);
+      }
+    }
+  }
+
+  void _toggleLike(int memoryId) async {
+    try {
+      final response = await http.post(
+        Uri.parse('${apiUrl.replaceAll('/memories', '')}/likes'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({
+          'memory_id': memoryId,
+          'user_type': 'family_member'
+        }),
+      );
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        setState(() {
+          if (data['is_liked']) {
+            likedMemories.add(memoryId);
+          } else {
+            likedMemories.remove(memoryId);
+          }
+          memoryLikeCounts[memoryId] = data['like_count'];
+        });
+      }
+    } catch (e) {
+      print('Error toggling like: $e');
+    }
+  }
+
+  // Like-Status für alle Memories laden
+  Future<void> _loadLikes() async {
+    try {
+      final response = await http.get(
+        Uri.parse('${apiUrl.replaceAll('/memories', '')}/likes/user/family_member'),
+      );
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        setState(() {
+          likedMemories = Set<int>.from(data['liked_memory_ids']);
+        });
+      }
+    } catch (e) {
+      print('Error loading likes: $e');
+    }
+  }
+
+  // Like-Counts für alle Memories laden
+  Future<void> _loadLikeCounts() async {
+    try {
+      for (final memory in memories) {
+        if (memory.id != null) {
+          final response = await http.get(
+            Uri.parse('${apiUrl.replaceAll('/memories', '')}/likes/${memory.id}'),
+          );
+
+          if (response.statusCode == 200) {
+            final data = jsonDecode(response.body);
+            setState(() {
+              memoryLikeCounts[memory.id!] = data['like_count'];
+            });
+          }
+        }
+      }
+    } catch (e) {
+      print('Error loading like counts: $e');
+    }
+  }
+
+  // Angehörige der Eingabenden Person - Ansicht
+  Widget _buildFamilyMembersView() {
+    return Container(
+      color: Colors.grey[50],
+      child: Column(
+        children: [
+          // Header mit Navigation
+          Container(
+            padding: EdgeInsets.only(top: 40, left: 20, right: 20, bottom: 20),
+            child: Row(
+              children: [
+                // Home Button
+                GestureDetector(
+                  onTap: () {
+                    setState(() {
+                      hasSelectedUserType = false;
+                      isFamilyView = false;
+                      isOmaView = false;
+                      isLifeChaptersView = false;
+                      isFamilyMembersView = false;
+                      previousView = null;
+                    });
+                  },
+                  child: Container(
+                    padding: EdgeInsets.all(isLargeMode ? 16 : 12),
+                    decoration: BoxDecoration(
+                      color: Colors.grey[100],
+                      shape: BoxShape.circle,
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black12,
+                          blurRadius: isLargeMode ? 12 : 8,
+                          spreadRadius: isLargeMode ? 3 : 2,
+                        ),
+                      ],
+                    ),
+                    child: Icon(
+                      Icons.home,
+                      size: isLargeMode ? 40 : 32,
+                      color: Colors.teal[400],
+                    ),
+                  ),
+                ),
+                SizedBox(width: 20),
+                // Zurück-Button
+                GestureDetector(
+                  onTap: () {
+                    setState(() {
+                      isFamilyMembersView = false;
+                    });
+                  },
+                  child: Container(
+                    padding: EdgeInsets.all(isLargeMode ? 16 : 12),
+                    decoration: BoxDecoration(
+                      color: Colors.grey[100],
+                      shape: BoxShape.circle,
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black12,
+                          blurRadius: isLargeMode ? 12 : 8,
+                          spreadRadius: isLargeMode ? 3 : 2,
+                        ),
+                      ],
+                    ),
+                  child: Icon(
+                      Icons.arrow_back,
+                      size: isLargeMode ? 40 : 32,
+                      color: Colors.grey[600],
+                    ),
+                  ),
+                ),
+                SizedBox(width: 20),
+                // Titel
+                Expanded(
+                  child: Text(
+                    'My Family',
+                    style: TextStyle(
+                      fontSize: isLargeMode ? 32 : 28,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.green[400],
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+
+          // Angehörige-Grid
+          Expanded(
+            child: GridView.builder(
+              padding: EdgeInsets.symmetric(horizontal: 20),
+              gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                crossAxisCount: 2,
+                childAspectRatio: 1.0,
+                crossAxisSpacing: 16,
+                mainAxisSpacing: 16,
+              ),
+              itemCount: familyMembers.length,
+              itemBuilder: (context, index) {
+                final member = familyMembers[index];
+                final hasNewContent = member['hasNewContent'] as bool;
+                
+                return GestureDetector(
+                  onTap: () {
+                    // TODO: Einzelne Angehörige-Seite implementieren
+                    print('${member['name']} - Coming Soon');
+                  },
+                  child: Container(
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(16),
+                      border: Border.all(
+                        color: hasNewContent ? member['color'] as Color : Colors.grey[300]!,
+                        width: hasNewContent ? 3 : 1,
+                      ),
+                      boxShadow: [
+                        BoxShadow(
+                          color: hasNewContent 
+                              ? (member['color'] as Color).withOpacity(0.2)
+                              : Colors.black.withOpacity(0.05),
+                          blurRadius: hasNewContent ? 15 : 8,
+                          spreadRadius: hasNewContent ? 2 : 1,
+                        ),
+                      ],
+                    ),
+                    child: Stack(
+                      children: [
+                        // Hauptinhalt
+            Center(
+                          child: Column(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              // Icon
+                              Container(
+                                width: isLargeMode ? 60 : 50,
+                                height: isLargeMode ? 60 : 50,
+                                decoration: BoxDecoration(
+                                  color: (member['color'] as Color).withOpacity(0.1),
+                                  shape: BoxShape.circle,
+                                ),
+                                child: Icon(
+                                  member['icon'] as IconData,
+                                  size: isLargeMode ? 30 : 24,
+                                  color: member['color'] as Color,
+                                ),
+                              ),
+                              SizedBox(height: 12),
+                              // Name
+                              Text(
+                                member['name'] as String,
+                                style: TextStyle(
+                                  fontSize: isLargeMode ? 18 : 16,
+                                  fontWeight: FontWeight.bold,
+                                  color: Colors.grey[800],
+                                ),
+                                textAlign: TextAlign.center,
+                              ),
+                              SizedBox(height: 4),
+                              // Relation
+                              Text(
+                                member['relation'] as String,
+                                style: TextStyle(
+                                  fontSize: isLargeMode ? 14 : 12,
+                                  color: Colors.grey[600],
+                                ),
+                                textAlign: TextAlign.center,
+                              ),
+                            ],
+                          ),
+                        ),
+                        // Benachrichtigungs-Badge (wie iPhone)
+                        if (hasNewContent)
+                          Positioned(
+                            top: 8,
+                            right: 8,
+              child: Container(
+                              width: isLargeMode ? 20 : 16,
+                              height: isLargeMode ? 20 : 16,
+                              decoration: BoxDecoration(
+                                color: Colors.red[500],
+                                shape: BoxShape.circle,
+                                border: Border.all(
+                                  color: Colors.white,
+                                  width: isLargeMode ? 2 : 1,
+                                ),
+                              ),
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
+                );
+              },
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // Kapitel des Lebens - Ansicht
+  Widget _buildLifeChaptersView() {
+    return Container(
+      color: Colors.grey[50],
+      child: Column(
+        children: [
+          // Header mit Navigation
+          Container(
+            padding: EdgeInsets.only(top: 40, left: 20, right: 20, bottom: 20),
+            child: Row(
+              children: [
+                // Home Button
+                GestureDetector(
+                  onTap: () {
+                    setState(() {
+                      hasSelectedUserType = false;
+                      isFamilyView = false;
+                      isOmaView = false;
+                      isLifeChaptersView = false;
+                    });
+                  },
+                  child: Container(
+                    padding: EdgeInsets.all(isLargeMode ? 16 : 12),
+                decoration: BoxDecoration(
+                  color: Colors.grey[100],
+                      shape: BoxShape.circle,
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black12,
+                          blurRadius: isLargeMode ? 12 : 8,
+                          spreadRadius: isLargeMode ? 3 : 2,
+                        ),
+                      ],
+                    ),
+                    child: Icon(
+                      Icons.home,
+                      size: isLargeMode ? 40 : 32,
+                      color: Colors.teal[400],
+                    ),
+                  ),
+                ),
+                SizedBox(width: 20),
+                // Zurück-Button (nur wenn nicht von Startseite)
+                if (hasSelectedUserType)
+                  GestureDetector(
+                    onTap: () {
+                      setState(() {
+                        isLifeChaptersView = false;
+                        // Return to the previous view
+                        if (previousView == 'oma') {
+                          isOmaView = true;
+                        } else if (previousView == 'main') {
+                          // Stay on main page (default state)
+                        }
+                        previousView = null; // Reset previous view
+                      });
+                    },
+                    child: Container(
+                      padding: EdgeInsets.all(isLargeMode ? 16 : 12),
+                      decoration: BoxDecoration(
+                        color: Colors.grey[100],
+                        shape: BoxShape.circle,
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.black12,
+                            blurRadius: isLargeMode ? 12 : 8,
+                            spreadRadius: isLargeMode ? 3 : 2,
+                          ),
+                        ],
+                      ),
+                  child: Icon(
+                        Icons.arrow_back,
+                        size: isLargeMode ? 40 : 32,
+                        color: Colors.grey[600],
+                      ),
+                    ),
+                  ),
+                if (hasSelectedUserType) SizedBox(width: 20),
+                // Titel
+                Expanded(
+                  child: Text(
+                    'Life Chapters',
+                    style: TextStyle(
+                      fontSize: isLargeMode ? 32 : 28,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.blue[400],
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+
+          // Lebensabschnitte-Liste
+          Expanded(
+            child: ListView.builder(
+              padding: EdgeInsets.symmetric(horizontal: 20),
+              itemCount: lifeChapters.length,
+              itemBuilder: (context, index) {
+                final chapter = lifeChapters[index];
+                final isCompleted = chapter['completed'] as bool;
+                
+                return Container(
+                  margin: EdgeInsets.only(bottom: 16),
+              child: Container(
+                    padding: EdgeInsets.all(isLargeMode ? 24 : 20),
+                    decoration: BoxDecoration(
+                      color: isCompleted ? Colors.white : Colors.grey[100],
+                  borderRadius: BorderRadius.circular(16),
+                      border: Border.all(
+                        color: isCompleted ? chapter['color'] as Color : Colors.grey[300]!,
+                        width: isCompleted ? 3 : 1,
+                      ),
+                  boxShadow: [
+                    BoxShadow(
+                          color: isCompleted 
+                              ? (chapter['color'] as Color).withOpacity(0.2)
+                              : Colors.black.withOpacity(0.05),
+                          blurRadius: isCompleted ? 15 : 8,
+                          spreadRadius: isCompleted ? 2 : 1,
+                        ),
+                      ],
+                    ),
+                    child: Row(
+                      children: [
+                        // Icon
+                        Container(
+                          width: isLargeMode ? 60 : 50,
+                          height: isLargeMode ? 60 : 50,
+                          decoration: BoxDecoration(
+                            color: isCompleted 
+                                ? (chapter['color'] as Color).withOpacity(0.1)
+                                : Colors.grey[200],
+                            shape: BoxShape.circle,
+                          ),
+                          child: Icon(
+                            chapter['icon'] as IconData,
+                            size: isLargeMode ? 30 : 24,
+                            color: isCompleted 
+                                ? chapter['color'] as Color
+                                : Colors.grey[500],
+                          ),
+                        ),
+                        SizedBox(width: 16),
+                        // Text
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                chapter['title'] as String,
+                                style: TextStyle(
+                                  fontSize: isLargeMode ? 20 : 18,
+                                  fontWeight: FontWeight.bold,
+                                  color: isCompleted ? Colors.grey[800] : Colors.grey[500],
+                                ),
+                              ),
+                              SizedBox(height: 4),
+                              Text(
+                                chapter['subtitle'] as String,
+                                style: TextStyle(
+                                  fontSize: isLargeMode ? 16 : 14,
+                                  color: isCompleted ? Colors.grey[600] : Colors.grey[400],
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        // Status
+                        if (isCompleted)
+                          Container(
+                            padding: EdgeInsets.all(8),
+                            decoration: BoxDecoration(
+                              color: chapter['color'] as Color,
+                              shape: BoxShape.circle,
+                            ),
+                            child: Icon(
+                              Icons.check,
+                              color: Colors.white,
+                              size: isLargeMode ? 20 : 16,
+                            ),
+                          )
+                        else
+                          Container(
+                            padding: EdgeInsets.all(8),
+                            decoration: BoxDecoration(
+                              color: Colors.grey[300],
+                              shape: BoxShape.circle,
+                            ),
+                            child: Icon(
+                              Icons.lock,
+                              color: Colors.grey[500],
+                              size: isLargeMode ? 20 : 16,
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
+                );
+              },
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // Seamless Scroll-Ansicht für alle Posts
+  Widget _buildSeamlessScrollView() {
+    // Gruppiere Memories nach Tagen
+    Map<String, List<Memory>> memoriesByDay = {};
+    for (final memory in memories) {
+      if (memory.createdAt != null) {
+        final dayKey = '${memory.createdAt!.year}-${memory.createdAt!.month.toString().padLeft(2, '0')}-${memory.createdAt!.day.toString().padLeft(2, '0')}';
+        if (!memoriesByDay.containsKey(dayKey)) {
+          memoriesByDay[dayKey] = [];
+        }
+        memoriesByDay[dayKey]!.add(memory);
+      }
+    }
+
+    // Sortiere Tage (neueste zuerst)
+    final sortedDays = memoriesByDay.keys.toList()..sort((a, b) => b.compareTo(a));
+    
+    // Finde den Index des Start-Tages
+    int startIndex = 0;
+    if (seamlessScrollStartDay != null) {
+      final startDayKey = '${seamlessScrollStartDay!.year}-${seamlessScrollStartDay!.month.toString().padLeft(2, '0')}-${seamlessScrollStartDay!.day.toString().padLeft(2, '0')}';
+      startIndex = sortedDays.indexOf(startDayKey);
+      if (startIndex == -1) startIndex = 0; // Fallback falls Tag nicht gefunden
+    }
+    
+    // Scroll zum Start-Tag nur einmal nach dem ersten Build
+    if (!hasScrolledToStartDay && seamlessScrollStartDay != null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (seamlessScrollController != null && seamlessScrollController!.hasClients) {
+          // Schätze die Höhe pro Tag (ca. 200px pro Tag + 24px Abstand)
+          final estimatedHeightPerDay = 224.0;
+          final targetOffset = startIndex * estimatedHeightPerDay;
+          seamlessScrollController!.animateTo(
+            targetOffset,
+            duration: Duration(milliseconds: 500),
+            curve: Curves.easeInOut,
+          );
+          hasScrolledToStartDay = true; // Markiere als gescrollt
+        }
+      });
+    }
+
+    return Container(
+      color: Colors.grey[50],
+      child: Column(
+        children: [
+          // Header mit Navigation
+          Container(
+            padding: EdgeInsets.only(top: 40, left: 20, right: 20, bottom: 20),
+            child: Row(
+              children: [
+                // Zurück-Button
+                GestureDetector(
+                  onTap: () {
+                    setState(() {
+                      showSeamlessScrollView = false;
+                      showDetailView = false;
+                    });
+                  },
+                  child: Container(
+                    padding: EdgeInsets.all(isLargeMode ? 16 : 12),
+                    decoration: BoxDecoration(
+                      color: Colors.grey[100],
+                      shape: BoxShape.circle,
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black12,
+                          blurRadius: isLargeMode ? 12 : 8,
+                          spreadRadius: isLargeMode ? 3 : 2,
+                        ),
+                      ],
+                    ),
+                    child: Icon(
+                      Icons.arrow_back,
+                      size: isLargeMode ? 40 : 32,
+                      color: Colors.grey[600],
+                    ),
+                  ),
+                ),
+                SizedBox(width: 20),
+                // Titel
+                Expanded(
+                  child: Text(
+                    'All Memories',
+                    style: TextStyle(
+                      fontSize: isLargeMode ? 32 : 28,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.teal[400],
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          
+          // Seamless Scroll-Liste
+          Expanded(
+            child: ListView.builder(
+              controller: seamlessScrollController,
+              padding: EdgeInsets.symmetric(horizontal: 20),
+              itemCount: sortedDays.length,
+              itemBuilder: (context, dayIndex) {
+                final dayKey = sortedDays[dayIndex];
+                final dayMemories = memoriesByDay[dayKey]!;
+                final dayDate = DateTime.parse(dayKey);
+                
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    // Tages-Header
+                    Container(
+                      margin: EdgeInsets.only(top: dayIndex > 0 ? 24 : 0, bottom: 16),
+                      padding: EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                      decoration: BoxDecoration(
+                        color: Colors.teal[50],
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(
+                          color: Colors.teal[200]!,
+                          width: 1,
+                        ),
+                      ),
+                      child: Row(
+                        children: [
+                          Icon(
+                            Icons.calendar_today,
+                            size: isLargeMode ? 20 : 18,
+                            color: Colors.teal[600],
+                          ),
+                          SizedBox(width: 8),
+                          Text(
+                            _formatDateForDisplay(dayDate),
+                            style: TextStyle(
+                              fontSize: isLargeMode ? 18 : 16,
+                              fontWeight: FontWeight.bold,
+                              color: Colors.teal[700],
+                            ),
+                          ),
+                          SizedBox(width: 8),
+                          Container(
+                            padding: EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                            decoration: BoxDecoration(
+                              color: Colors.teal[100],
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            child: Text(
+                              '${dayMemories.length} ${dayMemories.length == 1 ? 'memory' : 'memories'}',
+                              style: TextStyle(
+                                fontSize: isLargeMode ? 14 : 12,
+                                color: Colors.teal[600],
+                                fontWeight: FontWeight.w500,
+                              ),
+                            ),
+                          ),
+                          Spacer(),
+                          // Tageszusammenfassungs-Button für diesen Tag
+                          GestureDetector(
+                            onTap: () {
+                              fetchDailySummaryForDate(dayDate);
+                            },
+                            child: Container(
+                              padding: EdgeInsets.all(isLargeMode ? 8 : 6),
+                              decoration: BoxDecoration(
+                                color: Colors.blue[100],
+                                shape: BoxShape.circle,
+                                border: Border.all(
+                                  color: Colors.blue[200]!,
+                                  width: 1,
+                                ),
+                              ),
+                              child: Icon(
+                                Icons.auto_stories,
+                                size: isLargeMode ? 18 : 16,
+                                color: Colors.blue[600],
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    
+                    // Posts für diesen Tag
+                    ...dayMemories.map((memory) {
+                      return GestureDetector(
+                        onTap: () {
+                          // Konvertiere Memory zu Entry-Format für Detail-Ansicht
+                          final entry = {
+                            'id': memory.id,
+                            'title': memory.title,
+                            'content': memory.content,
+                            'timestamp': memory.createdAt,
+                            'media_files': memory.mediaFiles.map((f) => {
+                              'filename': f.filename,
+                              'file_type': f.fileType,
+                              'file_size': f.fileSize,
+                              'duration': f.duration,
+                              'created_at': DateTime.now().toIso8601String(),
+                            }).toList(),
+                          };
+                          openEntryDetail(entry);
+                        },
+                        child: Container(
+                          margin: EdgeInsets.only(bottom: 12),
+                          padding: EdgeInsets.all(isLargeMode ? 20 : 16),
+                          decoration: BoxDecoration(
+                            color: Colors.white,
+                            borderRadius: BorderRadius.circular(16),
+                            boxShadow: [
+                              BoxShadow(
+                                color: Colors.black.withOpacity(0.05),
+                      blurRadius: 10,
+                                spreadRadius: 2,
+                    ),
+                  ],
+                ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            // Titel
+                            Text(
+                              memory.title.isNotEmpty 
+                                  ? memory.title 
+                                  : 'Memory',
+                              style: TextStyle(
+                                fontSize: isLargeMode ? 18 : 16,
+                                fontWeight: FontWeight.w600,
+                                color: Colors.grey[800],
+                              ),
+                            ),
+                            SizedBox(height: 8),
+                            // Content
+                            Text(
+                              memory.content,
+                              style: TextStyle(
+                                fontSize: isLargeMode ? 16 : 14,
+                                color: Colors.grey[600],
+                                height: 1.4,
+                              ),
+                            ),
+                            SizedBox(height: 12),
+                            // Zeit, Media-Indikatoren und Likes
+                            Row(
+                              children: [
+                                Icon(
+                                  Icons.access_time,
+                                  size: isLargeMode ? 16 : 14,
+                                  color: Colors.grey[500],
+                                ),
+                                SizedBox(width: 6),
+                                Text(
+                                  _formatTimeForDisplay(memory.createdAt),
+                                  style: TextStyle(
+                                    fontSize: isLargeMode ? 14 : 12,
+                                    color: Colors.grey[500],
+                                  ),
+                                ),
+                                if (memory.mediaFiles.isNotEmpty) ...[
+                                  SizedBox(width: 16),
+                                  Icon(
+                                    Icons.attach_file,
+                                    size: isLargeMode ? 16 : 14,
+                                    color: Colors.grey[500],
+                                  ),
+                                  SizedBox(width: 4),
+                                  Text(
+                                    '${memory.mediaFiles.length} attachment${memory.mediaFiles.length == 1 ? '' : 's'}',
+                                    style: TextStyle(
+                                      fontSize: isLargeMode ? 14 : 12,
+                                      color: Colors.grey[500],
+                                    ),
+                                  ),
+                                ],
+                                if (memory.id != null && memoryLikeCounts.containsKey(memory.id) && memoryLikeCounts[memory.id]! > 0) ...[
+                                  SizedBox(width: 16),
+                                  Icon(
+                                    Icons.favorite,
+                                    size: isLargeMode ? 16 : 14,
+                                    color: Colors.red[500],
+                                  ),
+                                  SizedBox(width: 4),
+                                  Text(
+                                    '${memoryLikeCounts[memory.id]} like${memoryLikeCounts[memory.id] == 1 ? '' : 's'}',
+                                    style: TextStyle(
+                                      fontSize: isLargeMode ? 14 : 12,
+                                      color: Colors.red[500],
+                                      fontWeight: FontWeight.w500,
+                                    ),
+                                  ),
+                                ],
+                              ],
+                            ),
+                          ],
+                        ),
+                        ),
+                      );
+                    }).toList(),
+                  ],
+                );
+              },
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // Helper-Funktionen für Datum/Zeit-Formatierung
+  String _formatDateForDisplay(DateTime date) {
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    final yesterday = today.subtract(Duration(days: 1));
+    final dateOnly = DateTime(date.year, date.month, date.day);
+    
+    if (dateOnly == today) {
+      return 'Today';
+    } else if (dateOnly == yesterday) {
+      return 'Yesterday';
+    } else {
+      return '${date.day}.${date.month}.${date.year}';
+    }
+  }
+
+  String _formatTimeForDisplay(DateTime? dateTime) {
+    if (dateTime == null) return '';
+    return '${dateTime.hour.toString().padLeft(2, '0')}:${dateTime.minute.toString().padLeft(2, '0')}';
+  }
+
+  // Oma-Ansicht
+  Widget _buildOmaView() {
+    // Lade Likes beim ersten Öffnen der Oma-Ansicht
+    if (!hasLoadedLikesForOma) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _loadLikes();
+        hasLoadedLikesForOma = true;
+      });
+    }
+    
+    return Container(
+      color: Colors.grey[50],
+      child: Column(
+        children: [
+          // Header mit Navigation
+          Container(
+            padding: EdgeInsets.only(top: 40, left: 20, right: 20, bottom: 20),
+                child: Row(
+                  children: [
+                // Home Button
+                GestureDetector(
+                  onTap: () {
+                    setState(() {
+                      hasSelectedUserType = false;
+                      isFamilyView = false;
+                      isOmaView = false;
+                    isLifeChaptersView = false; // Ensure life chapters view is off
+                isFamilyMembersView = false; // Ensure family members view is off
+                    isFamilyMembersView = false; // Ensure family members view is off
+                    previousView = null; // Reset previous view
+                    hasLoadedLikesForOma = false; // Reset likes loading flag
+                    });
+                  },
+                  child: Container(
+                    padding: EdgeInsets.all(isLargeMode ? 16 : 12),
+                decoration: BoxDecoration(
+                  color: Colors.grey[100],
+                      shape: BoxShape.circle,
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black12,
+                          blurRadius: isLargeMode ? 12 : 8,
+                          spreadRadius: isLargeMode ? 3 : 2,
+                        ),
+                      ],
+                    ),
+                    child: Icon(
+                      Icons.home,
+                      size: isLargeMode ? 40 : 32,
+                      color: Colors.teal[400],
+                    ),
+                  ),
+                ),
+                SizedBox(width: 20),
+                // Familien-Button (wie auf der Eingabe-Seite)
+                GestureDetector(
+                        onTap: () {
+                          setState(() {
+                            isOmaView = false;
+                            isFamilyView = true;
+                            hasLoadedLikesForOma = false; // Reset likes loading flag
+                    isLifeChaptersView = false; // Ensure life chapters view is off
+                isFamilyMembersView = false; // Ensure family members view is off
+                    isFamilyMembersView = false; // Ensure family members view is off
+                    previousView = null; // Reset previous view
+                          });
+                        },
+                  child: Container(
+                    padding: EdgeInsets.all(isLargeMode ? 16 : 12),
+                    decoration: BoxDecoration(
+                      color: Colors.green[100],
+                      shape: BoxShape.circle,
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.green[200]!,
+                          blurRadius: isLargeMode ? 12 : 8,
+                          spreadRadius: isLargeMode ? 3 : 2,
+                        ),
+                      ],
+                    ),
+                    child: Icon(
+                      Icons.family_restroom,
+                      size: isLargeMode ? 40 : 32,
+                      color: Colors.green[600],
+                    ),
+                  ),
+                ),
+                SizedBox(width: 20),
+                // Titel
+                    Expanded(
+                  child: Text(
+                    'Grandma\'s Memories',
+                    style: TextStyle(
+                      fontSize: isLargeMode ? 32 : 28,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.pink[400],
+                        ),
+                      ),
+                    ),
+              ],
+            ),
+          ),
+          
+          // Neueste 3 Beiträge
+          Expanded(
+            child: memories.isEmpty
+                ? Center(
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Icon(
+                          Icons.elderly_woman,
+                          size: isLargeMode ? 80 : 64,
+                          color: Colors.grey[400],
+                        ),
+                        SizedBox(height: 20),
+                        Text(
+                          'No memories yet',
+                          style: TextStyle(
+                            fontSize: isLargeMode ? 24 : 20,
+                            color: Colors.grey[600],
+                            fontWeight: FontWeight.w500,
+                          ),
+                        ),
+                        SizedBox(height: 10),
+                        Text(
+                          'Memories will appear here',
+                          style: TextStyle(
+                            fontSize: isLargeMode ? 18 : 16,
+                            color: Colors.grey[500],
+                          ),
+                        ),
+                      ],
+                    ),
+                  )
+                : ListView.builder(
+                    padding: EdgeInsets.symmetric(horizontal: 20),
+                    itemCount: memories.length > 3 ? 3 : memories.length, // Nur die neuesten 3
+                    itemBuilder: (context, index) {
+                      final memory = memories[index];
+                      return Container(
+                        margin: EdgeInsets.only(bottom: 16),
+                        padding: EdgeInsets.all(isLargeMode ? 20 : 16),
+                        decoration: BoxDecoration(
+                          color: Colors.white,
+                  borderRadius: BorderRadius.circular(16),
+                  boxShadow: [
+                    BoxShadow(
+                              color: Colors.black.withOpacity(0.05),
+                      blurRadius: 10,
+                              spreadRadius: 2,
+                    ),
+                  ],
+                ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            // Titel
+                            Text(
+                              memory.title.isNotEmpty 
+                                  ? memory.title 
+                                  : 'New Memory',
+                              style: TextStyle(
+                                fontSize: isLargeMode ? 18 : 16,
+                                fontWeight: FontWeight.w600,
+                                color: Colors.grey[800],
+                              ),
+                            ),
+                            SizedBox(height: 8),
+                            // Content Preview
+                            Text(
+                              memory.content.length > 100 
+                                  ? '${memory.content.substring(0, 100)}...'
+                                  : memory.content,
+                              style: TextStyle(
+                                fontSize: isLargeMode ? 16 : 14,
+                                color: Colors.grey[600],
+                                height: 1.4,
+                              ),
+                            ),
+                            SizedBox(height: 12),
+                            // Datum und Like-Button
+                            Row(
+                              children: [
+                                Icon(
+                                  Icons.access_time,
+                                  size: isLargeMode ? 16 : 14,
+                                  color: Colors.grey[500],
+                                ),
+                                SizedBox(width: 6),
+                                Text(
+                                  _formatDateForFamily(memory.createdAt),
+                                  style: TextStyle(
+                                    fontSize: isLargeMode ? 14 : 12,
+                                    color: Colors.grey[500],
+                                  ),
+                                ),
+                                Spacer(),
+                                // Like-Button
+                                GestureDetector(
+                                  onTap: () {
+                                    if (memory.id != null) {
+                                      _toggleLike(memory.id!);
+                                    }
+                                  },
+                                  child: Container(
+                                    padding: EdgeInsets.all(8),
+                                    decoration: BoxDecoration(
+                                      color: memory.id != null && likedMemories.contains(memory.id)
+                                          ? Colors.red[50]
+                                          : Colors.grey[50],
+                                      borderRadius: BorderRadius.circular(20),
+                                      border: Border.all(
+                                        color: memory.id != null && likedMemories.contains(memory.id)
+                                            ? Colors.red[200]!
+                                            : Colors.grey[200]!,
+                                        width: 1,
+                                      ),
+                                    ),
+                                    child: Icon(
+                                      memory.id != null && likedMemories.contains(memory.id)
+                                          ? Icons.favorite
+                                          : Icons.favorite_border,
+                                      size: isLargeMode ? 20 : 18,
+                                      color: memory.id != null && likedMemories.contains(memory.id)
+                                          ? Colors.red[500]
+                                          : Colors.grey[500],
+                                    ),
+                                  ),
+                    ),
+                  ],
+                ),
+                          ],
+                        ),
+                      );
+                    },
+                  ),
+          ),
+          
+          // Bottom Navigation
+          Container(
+            padding: EdgeInsets.all(20),
+                child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                  children: [
+                      // Buch-Button (links)
+                      GestureDetector(
+                        onTap: () {
+                          setState(() {
+                            previousView = 'oma'; // Remember we came from Oma page
+                            isLifeChaptersView = true;
+                            isOmaView = false; // Exit Oma view when going to life chapters
+                          });
+                        },
+                  child: Container(
+                    padding: EdgeInsets.all(isLargeMode ? 20 : 16),
+                    decoration: BoxDecoration(
+                      color: Colors.blue[100],
+                      shape: BoxShape.circle,
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.blue[200]!,
+                          blurRadius: isLargeMode ? 12 : 8,
+                          spreadRadius: isLargeMode ? 3 : 2,
+                        ),
+                      ],
+                    ),
+                    child: Icon(
+                      Icons.menu_book,
+                      size: isLargeMode ? 40 : 32,
+                      color: Colors.blue[600],
+                    ),
+                  ),
+                ),
+                
+                // Chat-Button (mitte)
+                GestureDetector(
+                  onTap: () {
+                    setState(() {
+                      showChatView = true;
+                      isOmaView = false;
+                    });
+                  },
+                  child: Container(
+                    padding: EdgeInsets.all(isLargeMode ? 24 : 20),
+                    decoration: BoxDecoration(
+                      color: Colors.pink[100],
+                      shape: BoxShape.circle,
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.pink[200]!,
+                          blurRadius: isLargeMode ? 12 : 8,
+                          spreadRadius: isLargeMode ? 3 : 2,
+                    ),
+                  ],
+                ),
+                    child: Icon(
+                      Icons.chat,
+                      size: isLargeMode ? 40 : 32,
+                      color: Colors.pink[600],
+                    ),
+                  ),
+                ),
+                
+                // Kalender-Button (rechts)
+                GestureDetector(
+                  onTap: () {
+                    setState(() {
+                      showDailySummariesList = true;
+                      isOmaView = false;
+                    });
+                  },
+                  child: Container(
+                    padding: EdgeInsets.all(isLargeMode ? 20 : 16),
+                    decoration: BoxDecoration(
+                      color: Colors.teal[100],
+                      shape: BoxShape.circle,
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.teal[200]!,
+                          blurRadius: isLargeMode ? 12 : 8,
+                          spreadRadius: isLargeMode ? 3 : 2,
+                        ),
+                      ],
+                    ),
+                    child: Icon(
+                      Icons.calendar_month,
+                      size: isLargeMode ? 40 : 32,
+                      color: Colors.teal[600],
+                    ),
+                  ),
+                ),
+              ],
+              ),
+            ),
+        ],
       ),
     );
   }

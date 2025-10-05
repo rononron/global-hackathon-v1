@@ -14,6 +14,7 @@ from groq_client import generate_smart_title
 DB_PATH = "memory_keeper.db"
 QUESTIONS_DB_PATH = "questions.db"
 DAILY_SUMMARIES_DB_PATH = "daily_summaries.db"
+LIKES_DB_PATH = "likes.db"
 UPLOAD_DIR = "uploads"
 
 # Upload-Verzeichnis erstellen
@@ -34,6 +35,30 @@ def get_daily_summaries_db_connection():
     conn = sqlite3.connect(DAILY_SUMMARIES_DB_PATH)
     conn.row_factory = sqlite3.Row
     return conn
+
+def get_likes_db_connection():
+    conn = sqlite3.connect(LIKES_DB_PATH)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+# --- Likes Datenbank initialisieren ---
+def init_likes_db():
+    conn = get_likes_db_connection()
+    cursor = conn.cursor()
+    
+    # Tabelle für Likes erstellen
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS likes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            memory_id INTEGER NOT NULL,
+            user_type TEXT NOT NULL, -- 'family_member' oder 'input_giver'
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(memory_id, user_type)
+        )
+    ''')
+    
+    conn.commit()
+    conn.close()
 
 # --- Fragenvorschläge Datenbank initialisieren ---
 def init_questions_db():
@@ -84,6 +109,7 @@ def init_questions_db():
 
 # Datenbank beim Start initialisieren
 init_questions_db()
+init_likes_db()
 
 # --- Tageszusammenfassungen Datenbank initialisieren ---
 def init_daily_summaries_db():
@@ -133,10 +159,19 @@ def init_database():
             title TEXT NOT NULL,
             content TEXT NOT NULL,
             media_files TEXT,
+            life_chapter TEXT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
+    
+    # Füge life_chapter Spalte hinzu, falls sie nicht existiert (für bestehende Datenbanken)
+    try:
+        cursor.execute("ALTER TABLE memories ADD COLUMN life_chapter TEXT")
+        conn.commit()
+    except sqlite3.OperationalError:
+        # Spalte existiert bereits
+        pass
     conn.commit()
     conn.close()
 
@@ -167,6 +202,7 @@ class Memory(BaseModel):
     title: str
     content: str
     media_files: Optional[List[MediaFile]] = []
+    life_chapter: Optional[str] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 
@@ -175,12 +211,27 @@ class DailySummary(BaseModel):
     date: str  # Format: YYYY-MM-DD
     summary: str
     created_at: Optional[datetime] = None
+
+class LikeRequest(BaseModel):
+    memory_id: int
+    user_type: str  # 'family_member' oder 'input_giver'
+
+class LikeResponse(BaseModel):
+    memory_id: int
+    is_liked: bool
+    like_count: int
     updated_at: Optional[datetime] = None
 
 # --- Endpoints ---
 @app.get("/")
 def root():
     return {"message": "Memory Keeper API läuft!"}
+
+# Wake-up endpoint for demo purposes
+@app.get("/wake-up")
+def wake_up():
+    """Wake-up endpoint to keep the backend server warm for demo purposes"""
+    return {"message": "Backend is awake and ready!", "timestamp": datetime.now().isoformat()}
 
 # Alle Memories abrufen
 @app.get("/memories", response_model=List[Memory])
@@ -195,6 +246,7 @@ def get_memories():
             "id": row["id"],
             "title": row["title"] or "",  # Leerer String statt None
             "content": row["content"],
+            "life_chapter": row["life_chapter"],
             "created_at": row["created_at"],
             "updated_at": None  # updated_at existiert nicht in der DB
         }
@@ -227,8 +279,8 @@ def add_memory(memory: Memory):
     media_files_json = json.dumps([media.dict() for media in memory.media_files]) if memory.media_files else "[]"
     
     cursor.execute(
-        "INSERT INTO memories (title, content, media_files) VALUES (?, ?, ?)", 
-        (final_title, memory.content, media_files_json)
+        "INSERT INTO memories (title, content, media_files, life_chapter) VALUES (?, ?, ?, ?)", 
+        (final_title, memory.content, media_files_json, memory.life_chapter)
     )
     conn.commit()
     memory.id = cursor.lastrowid
@@ -550,3 +602,99 @@ def test_ai_title(request: dict):
         "ai_title": ai_title,
         "success": True
     }
+
+# --- Like Endpoints ---
+@app.post("/likes", response_model=LikeResponse)
+def toggle_like(like_request: LikeRequest):
+    """Toggle like for a memory"""
+    try:
+        conn = get_likes_db_connection()
+        cursor = conn.cursor()
+        
+        # Prüfe ob Like bereits existiert
+        cursor.execute(
+            "SELECT id FROM likes WHERE memory_id = ? AND user_type = ?",
+            (like_request.memory_id, like_request.user_type)
+        )
+        existing_like = cursor.fetchone()
+        
+        if existing_like:
+            # Like entfernen
+            cursor.execute(
+                "DELETE FROM likes WHERE memory_id = ? AND user_type = ?",
+                (like_request.memory_id, like_request.user_type)
+            )
+            is_liked = False
+        else:
+            # Like hinzufügen
+            cursor.execute(
+                "INSERT INTO likes (memory_id, user_type) VALUES (?, ?)",
+                (like_request.memory_id, like_request.user_type)
+            )
+            is_liked = True
+        
+        # Like-Count für diese Memory berechnen
+        cursor.execute(
+            "SELECT COUNT(*) as count FROM likes WHERE memory_id = ?",
+            (like_request.memory_id,)
+        )
+        like_count = cursor.fetchone()['count']
+        
+        conn.commit()
+        conn.close()
+        
+        return LikeResponse(
+            memory_id=like_request.memory_id,
+            is_liked=is_liked,
+            like_count=like_count
+        )
+        
+    except Exception as e:
+        return {"error": str(e)}
+
+@app.get("/likes/{memory_id}")
+def get_likes_for_memory(memory_id: int):
+    """Get all likes for a specific memory"""
+    try:
+        conn = get_likes_db_connection()
+        cursor = conn.cursor()
+        
+        cursor.execute(
+            "SELECT user_type, created_at FROM likes WHERE memory_id = ? ORDER BY created_at DESC",
+            (memory_id,)
+        )
+        likes = cursor.fetchall()
+        
+        conn.close()
+        
+        return {
+            "memory_id": memory_id,
+            "likes": [{"user_type": like['user_type'], "created_at": like['created_at']} for like in likes],
+            "like_count": len(likes)
+        }
+        
+    except Exception as e:
+        return {"error": str(e)}
+
+@app.get("/likes/user/{user_type}")
+def get_likes_by_user_type(user_type: str):
+    """Get all liked memory IDs for a specific user type"""
+    try:
+        conn = get_likes_db_connection()
+        cursor = conn.cursor()
+        
+        cursor.execute(
+            "SELECT memory_id FROM likes WHERE user_type = ?",
+            (user_type,)
+        )
+        likes = cursor.fetchall()
+        
+        conn.close()
+        
+        return {
+            "user_type": user_type,
+            "liked_memory_ids": [like['memory_id'] for like in likes]
+        }
+        
+    except Exception as e:
+        return {"error": str(e)}
